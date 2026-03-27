@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Lobby – {{ tournament_id }}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --green: #00d26a; --dark: #0a0f0d; --card: #111a14;
+      --border: #1e2e22; --muted: #4a6350; --white: #e8f0ea; --red: #ff4560;
+      --gold: #ffc800;
+    }
+    body { background: var(--dark); color: var(--white); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+
+    /* NAV */
+    nav { display: flex; justify-content: space-between; align-items: center; padding: 1.2rem 2.5rem; border-bottom: 1px solid var(--border); }
+    .nav-logo { font-family: 'Bebas Neue', sans-serif; font-size: 1.8rem; letter-spacing: 3px; color: var(--green); }
+    .btn-dash { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: .45rem 1.1rem; border-radius: 6px; font-family: 'DM Sans', sans-serif; font-size: .85rem; cursor: pointer; text-decoration: none; transition: border-color .2s, color .2s; }
+    .btn-dash:hover { border-color: var(--green); color: var(--green); }
+
+    /* MAIN */
+    .main { max-width: 780px; margin: 0 auto; padding: 3rem 2rem; }
+
+    /* TOURNAMENT HEADER */
+    .t-header {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2rem 2.2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+    .t-header-left {}
+    .t-label { font-size: .72rem; letter-spacing: 3px; text-transform: uppercase; color: var(--green); margin-bottom: .4rem; }
+    .t-id { font-family: 'Bebas Neue', sans-serif; font-size: 2.6rem; letter-spacing: 3px; }
+    .t-sub { color: var(--muted); font-size: .88rem; margin-top: .3rem; }
+
+    .host-badge {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: .3rem;
+    }
+    .host-label { font-size: .72rem; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); }
+    .host-name { font-family: 'Bebas Neue', sans-serif; font-size: 1.5rem; letter-spacing: 1px; }
+    .host-crown { font-size: 1.2rem; }
+
+    /* PLAYERS */
+    .section-label {
+      font-size: .72rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+
+    .players-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+
+    .player-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.3rem 1.4rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      transition: border-color .2s;
+      position: relative;
+    }
+    .player-card.is-host { border-color: rgba(255,200,0,.35); }
+    .player-card.is-you  { border-color: rgba(0,210,106,.3); }
+
+    .avatar {
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      background: var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.2rem;
+      flex-shrink: 0;
+    }
+    .player-card.is-host .avatar { background: rgba(255,200,0,.15); color: var(--gold); }
+    .player-card.is-you  .avatar { background: rgba(0,210,106,.12); color: var(--green); }
+
+    .player-info {}
+    .player-full { font-weight: 700; font-size: .95rem; }
+    .player-user { font-size: .78rem; color: var(--muted); }
+
+    .badge {
+      position: absolute; top: .6rem; right: .7rem;
+      font-size: .65rem; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; padding: .2rem .5rem;
+      border-radius: 4px;
+    }
+    .badge-host { background: rgba(255,200,0,.15); color: var(--gold); }
+    .badge-you  { background: rgba(0,210,106,.12); color: var(--green); }
+
+    /* FLASH */
+    .flashes { margin-bottom: 1.5rem; }
+    .flash { padding: .7rem 1rem; border-radius: 8px; font-size: .88rem; margin-bottom: .6rem; }
+    .flash.success { background: rgba(0,210,106,.1); border: 1px solid rgba(0,210,106,.3); color: var(--green); }
+    .flash.error   { background: rgba(255,69,96,.1);  border: 1px solid rgba(255,69,96,.3);  color: var(--red); }
+
+    /* PULSE DOT */
+    .live-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      margin-right: .5rem;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: .4; transform: scale(.7); }
+    }
+
+    .refresh-hint { font-size: .8rem; color: var(--muted); margin-top: 1.6rem; display: flex; align-items: center; gap: .5rem; }
+    .refresh-hint a { color: var(--green); text-decoration: none; font-weight: 700; }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="nav-logo">⚽ KICKOFF</div>
+    <a href="/dashboard" class="btn-dash">← Dashboard</a>
+  </nav>
+
+  <div class="main">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flashes">
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Tournament Header -->
+    <div class="t-header">
+      <div class="t-header-left">
+        <div class="t-label">Tournament Lobby</div>
+        <div class="t-id">{{ tournament_id }}</div>
+        <div class="t-sub"><span class="live-dot"></span> {{ players | length }} player{{ 's' if players | length != 1 }} joined</div>
+      </div>
+      <div class="host-badge">
+        <div class="host-label">Host</div>
+        <div class="host-name">{{ host_full_name }} <span class="host-crown">👑</span></div>
+        <div style="font-size:.78rem;color:var(--muted)">@{{ host }}</div>
+      </div>
+    </div>
+
+    <!-- Players -->
+    <div class="section-label">Players</div>
+    <div class="players-grid">
+      {% for player in players %}
+        <div class="player-card {% if player.is_host %}is-host{% elif player.username == current_user %}is-you{% endif %}">
+          <div class="avatar">{{ player.full_name[0].upper() }}</div>
+          <div class="player-info">
+            <div class="player-full">{{ player.full_name }}</div>
+            <div class="player-user">@{{ player.username }}</div>
+          </div>
+          {% if player.is_host %}
+            <div class="badge badge-host">Host</div>
+          {% elif player.username == current_user %}
+            <div class="badge badge-you">You</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+
+    <p class="refresh-hint">
+      Waiting for more players?
+      <a href="/tournament/{{ tournament_id }}">Refresh lobby</a>
+    </p>
+
+  </div>
+
+</body>
+</html>

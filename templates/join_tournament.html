@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Join Tournament – FIFA</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --yellow: #ffc800; --dark: #0a0f0d; --card: #111a14;
+      --border: #1e2e22; --muted: #4a6350; --white: #e8f0ea; --red: #ff4560;
+    }
+    body { background: var(--dark); color: var(--white); font-family: 'DM Sans', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; }
+
+    .back { position: fixed; top: 1.5rem; left: 1.8rem; font-size: .85rem; color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: .4rem; transition: color .2s; }
+    .back:hover { color: var(--white); }
+
+    .box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 2.8rem 2.5rem;
+      width: 100%;
+      max-width: 460px;
+    }
+    .box-icon { font-size: 2.2rem; margin-bottom: 1rem; }
+    .box h1 { font-family: 'Bebas Neue', sans-serif; font-size: 2.4rem; letter-spacing: 2px; margin-bottom: .4rem; }
+    .box p { color: var(--muted); font-size: .9rem; margin-bottom: 2rem; line-height: 1.5; }
+
+    label { display: block; font-size: .78rem; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: .5rem; }
+    input[type=text], input[type=password] {
+      width: 100%; background: var(--dark); border: 1px solid var(--border);
+      color: var(--white); font-family: 'DM Sans', sans-serif; font-size: .95rem;
+      padding: .8rem 1rem; border-radius: 8px; outline: none;
+      transition: border-color .2s;
+      margin-bottom: 1.3rem;
+    }
+    input:focus { border-color: var(--yellow); }
+
+    .btn {
+      width: 100%; padding: .95rem; border: none; border-radius: 9px;
+      background: var(--yellow); color: #1a1000; font-family: 'DM Sans', sans-serif;
+      font-size: 1rem; font-weight: 700; cursor: pointer; letter-spacing: .5px;
+      transition: opacity .2s, transform .15s;
+    }
+    .btn:hover { opacity: .88; transform: translateY(-1px); }
+
+    .flash { padding: .7rem 1rem; border-radius: 8px; font-size: .88rem; margin-bottom: 1.2rem; }
+    .flash.success { background: rgba(0,210,106,.1); border: 1px solid rgba(0,210,106,.3); color: #00d26a; }
+    .flash.error   { background: rgba(255,69,96,.1);  border: 1px solid rgba(255,69,96,.3);  color: var(--red); }
+
+    .hint { font-size: .8rem; color: var(--muted); margin-top: 1.2rem; text-align: center; }
+    .hint a { color: var(--yellow); text-decoration: none; }
+  </style>
+</head>
+<body>
+
+  <a href="/dashboard" class="back">← Back to Dashboard</a>
+
+  <div class="box">
+    <div class="box-icon">🎮</div>
+    <h1>Join Tournament</h1>
+    <p>Enter the Tournament ID and password shared by the host to jump straight into the lobby.</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <form method="POST" action="/join_tournament">
+      <label for="tournament_id">Tournament ID</label>
+      <input type="text" id="tournament_id" name="tournament_id" placeholder="Enter the tournament ID" autocomplete="off" required/>
+
+      <label for="tournament_password">Tournament Password</label>
+      <input type="password" id="tournament_password" name="tournament_password" placeholder="Enter the password" required/>
+
+      <button type="submit" class="btn">Join &amp; Enter Lobby</button>
+    </form>
+
+    <p class="hint">Want to host instead? <a href="/create_tournament">Create a tournament</a></p>
+  </div>
+
+</body>
+</html>

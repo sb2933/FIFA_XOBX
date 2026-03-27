@@ -4,10 +4,11 @@ app = Flask(__name__)
 app.secret_key = "fifa_secret_key"
 
 # Temporary user storage
-# Later you can replace this with a database
 users = {}
-
 MAX_USERS = 20
+
+# Tournament storage: { tournament_id: { password, host, players: [username, ...] } }
+tournaments = {}
 
 
 @app.route("/")
@@ -24,7 +25,6 @@ def signup():
         password = request.form.get("password", "")
         confirm_password = request.form.get("confirm_password", "")
 
-        # Validation
         if not full_name or not username or not email or not password or not confirm_password:
             flash("All fields are required.", "error")
             return redirect(url_for("signup"))
@@ -95,7 +95,6 @@ def forgot_password():
             return redirect(url_for("forgot_password"))
 
         found_user = None
-
         for username, user_data in users.items():
             if username == username_or_email or user_data["email"] == username_or_email:
                 found_user = username
@@ -123,9 +122,117 @@ def dashboard():
     return render_template("dashboard.html", user=user, username=username)
 
 
+# ── Tournament: Create ─────────────────────────────────────────────────────────
+
+@app.route("/create_tournament", methods=["GET", "POST"])
+def create_tournament():
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    if request.method == "POST":
+        tournament_id = request.form.get("tournament_id", "").strip()
+        tournament_password = request.form.get("tournament_password", "")
+
+        if not tournament_id or not tournament_password:
+            flash("Tournament ID and password are required.", "error")
+            return redirect(url_for("create_tournament"))
+
+        if tournament_id in tournaments:
+            flash("A tournament with that ID already exists.", "error")
+            return redirect(url_for("create_tournament"))
+
+        username = session["username"]
+        tournaments[tournament_id] = {
+            "password": tournament_password,
+            "host": username,
+            "players": [username]
+        }
+
+        session["tournament_id"] = tournament_id
+        flash(f'Tournament "{tournament_id}" created!', "success")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    return render_template("create_tournament.html")
+
+
+# ── Tournament: Join ───────────────────────────────────────────────────────────
+
+@app.route("/join_tournament", methods=["GET", "POST"])
+def join_tournament():
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    if request.method == "POST":
+        tournament_id = request.form.get("tournament_id", "").strip()
+        tournament_password = request.form.get("tournament_password", "")
+
+        if not tournament_id or not tournament_password:
+            flash("Tournament ID and password are required.", "error")
+            return redirect(url_for("join_tournament"))
+
+        if tournament_id not in tournaments:
+            flash("Tournament not found.", "error")
+            return redirect(url_for("join_tournament"))
+
+        if tournaments[tournament_id]["password"] != tournament_password:
+            flash("Incorrect tournament password.", "error")
+            return redirect(url_for("join_tournament"))
+
+        username = session["username"]
+        if username not in tournaments[tournament_id]["players"]:
+            tournaments[tournament_id]["players"].append(username)
+
+        session["tournament_id"] = tournament_id
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    return render_template("join_tournament.html")
+
+
+# ── Tournament: Lobby ──────────────────────────────────────────────────────────
+
+@app.route("/tournament/<tournament_id>")
+def tournament_lobby(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    if tournament_id not in tournaments:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    username = session["username"]
+    tournament = tournaments[tournament_id]
+
+    if username not in tournament["players"]:
+        flash("You are not part of this tournament.", "error")
+        return redirect(url_for("dashboard"))
+
+    host_full_name = users.get(tournament["host"], {}).get("full_name", tournament["host"])
+
+    players_info = []
+    for p in tournament["players"]:
+        players_info.append({
+            "username": p,
+            "full_name": users.get(p, {}).get("full_name", p),
+            "is_host": p == tournament["host"]
+        })
+
+    return render_template(
+        "tournament_lobby.html",
+        tournament_id=tournament_id,
+        host=tournament["host"],
+        host_full_name=host_full_name,
+        players=players_info,
+        current_user=username
+    )
+
+
 @app.route("/logout")
 def logout():
     session.pop("username", None)
+    session.pop("tournament_id", None)
     flash("You have been logged out.", "success")
     return redirect(url_for("home"))
 
