@@ -1,0 +1,43 @@
+{
+  "users": {
+    "sb2933": {
+      "full_name": "Sworup Bohara",
+      "email": "boharasworup20@gmail.com",
+      "password": "Hu$tlemore123"
+    },
+    "amma": {
+      "full_name": "Sworup Lom",
+      "email": "boharasworup@gmail.com",
+      "password": "Hu$tlemore123"
+    },
+    "ram123": {
+      "full_name": "Ram",
+      "email": "klausisme20@gmail.com",
+      "password": "Hu$tlemore123"
+    }
+  },
+  "tournaments": {
+    "hus": {
+      "password": "ok",
+      "host": "sb2933",
+      "players": [
+        "sb2933"
+      ]
+    },
+    "ama": {
+      "password": "ama",
+      "host": "ram123",
+      "players": [
+        "ram123",
+        "sb2933"
+      ]
+    },
+    "pat": {
+      "password": "pat",
+      "host": "sb2933",
+      "players": [
+        "sb2933"
+      ]
+    }
+  }
+}

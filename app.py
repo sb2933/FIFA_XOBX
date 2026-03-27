@@ -1,14 +1,30 @@
+import json
+import os
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 
 app = Flask(__name__)
 app.secret_key = "fifa_secret_key"
 
-# Temporary user storage
-users = {}
-MAX_USERS = 20
+# ── Persistence helpers ────────────────────────────────────────────────────────
+DATA_FILE = os.path.join(os.path.dirname(__file__), "data.json")
 
-# Tournament storage: { tournament_id: { password, host, players: [username, ...] } }
-tournaments = {}
+def _load():
+    """Load users and tournaments from disk."""
+    if not os.path.exists(DATA_FILE):
+        return {}, {}
+    try:
+        with open(DATA_FILE, "r") as f:
+            data = json.load(f)
+        return data.get("users", {}), data.get("tournaments", {})
+    except (json.JSONDecodeError, IOError):
+        return {}, {}
+
+def _save(users, tournaments):
+    """Persist users and tournaments to disk."""
+    with open(DATA_FILE, "w") as f:
+        json.dump({"users": users, "tournaments": tournaments}, f, indent=2)
+
+MAX_USERS = 20
 
 
 @app.route("/")
@@ -19,10 +35,11 @@ def home():
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
-        full_name = request.form.get("full_name", "").strip()
-        username = request.form.get("username", "").strip()
-        email = request.form.get("email", "").strip()
-        password = request.form.get("password", "")
+        users, tournaments = _load()
+        full_name        = request.form.get("full_name", "").strip()
+        username         = request.form.get("username", "").strip()
+        email            = request.form.get("email", "").strip()
+        password         = request.form.get("password", "")
         confirm_password = request.form.get("confirm_password", "")
 
         if not full_name or not username or not email or not password or not confirm_password:
@@ -46,11 +63,8 @@ def signup():
             flash("Passwords do not match.", "error")
             return redirect(url_for("signup"))
 
-        users[username] = {
-            "full_name": full_name,
-            "email": email,
-            "password": password
-        }
+        users[username] = {"full_name": full_name, "email": email, "password": password}
+        _save(users, tournaments)
 
         flash("Account created successfully. Please log in.", "success")
         return redirect(url_for("login"))
@@ -61,6 +75,7 @@ def signup():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
+        users, _ = _load()
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
@@ -82,8 +97,9 @@ def login():
 @app.route("/forgot_password", methods=["GET", "POST"])
 def forgot_password():
     if request.method == "POST":
-        username_or_email = request.form.get("username_or_email", "").strip()
-        new_password = request.form.get("new_password", "")
+        users, tournaments   = _load()
+        username_or_email    = request.form.get("username_or_email", "").strip()
+        new_password         = request.form.get("new_password", "")
         confirm_new_password = request.form.get("confirm_new_password", "")
 
         if not username_or_email or not new_password or not confirm_new_password:
@@ -95,9 +111,9 @@ def forgot_password():
             return redirect(url_for("forgot_password"))
 
         found_user = None
-        for username, user_data in users.items():
-            if username == username_or_email or user_data["email"] == username_or_email:
-                found_user = username
+        for uname, udata in users.items():
+            if uname == username_or_email or udata["email"] == username_or_email:
+                found_user = uname
                 break
 
         if not found_user:
@@ -105,6 +121,7 @@ def forgot_password():
             return redirect(url_for("forgot_password"))
 
         users[found_user]["password"] = new_password
+        _save(users, tournaments)
         flash("Password reset successful. Please log in.", "success")
         return redirect(url_for("login"))
 
@@ -117,6 +134,7 @@ def dashboard():
         flash("Please log in first.", "error")
         return redirect(url_for("login"))
 
+    users, _ = _load()
     username = session["username"]
     user = users.get(username)
     return render_template("dashboard.html", user=user, username=username)
@@ -131,7 +149,8 @@ def create_tournament():
         return redirect(url_for("login"))
 
     if request.method == "POST":
-        tournament_id = request.form.get("tournament_id", "").strip()
+        users, tournaments  = _load()
+        tournament_id       = request.form.get("tournament_id", "").strip()
         tournament_password = request.form.get("tournament_password", "")
 
         if not tournament_id or not tournament_password:
@@ -139,17 +158,17 @@ def create_tournament():
             return redirect(url_for("create_tournament"))
 
         if tournament_id in tournaments:
-            flash("A tournament with that ID already exists.", "error")
+            flash("A tournament with that ID already exists. Choose a different ID.", "error")
             return redirect(url_for("create_tournament"))
 
         username = session["username"]
         tournaments[tournament_id] = {
             "password": tournament_password,
             "host": username,
-            "players": [username]
+            "players": [username],
         }
+        _save(users, tournaments)
 
-        session["tournament_id"] = tournament_id
         flash(f'Tournament "{tournament_id}" created!', "success")
         return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
 
@@ -165,7 +184,8 @@ def join_tournament():
         return redirect(url_for("login"))
 
     if request.method == "POST":
-        tournament_id = request.form.get("tournament_id", "").strip()
+        users, tournaments  = _load()
+        tournament_id       = request.form.get("tournament_id", "").strip()
         tournament_password = request.form.get("tournament_password", "")
 
         if not tournament_id or not tournament_password:
@@ -173,7 +193,12 @@ def join_tournament():
             return redirect(url_for("join_tournament"))
 
         if tournament_id not in tournaments:
-            flash("Tournament not found.", "error")
+            available = list(tournaments.keys())
+            flash(
+                f'Tournament "{tournament_id}" not found. '
+                f'Active tournaments: {available if available else "none yet"}.',
+                "error"
+            )
             return redirect(url_for("join_tournament"))
 
         if tournaments[tournament_id]["password"] != tournament_password:
@@ -183,8 +208,8 @@ def join_tournament():
         username = session["username"]
         if username not in tournaments[tournament_id]["players"]:
             tournaments[tournament_id]["players"].append(username)
+            _save(users, tournaments)
 
-        session["tournament_id"] = tournament_id
         return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
 
     return render_template("join_tournament.html")
@@ -198,11 +223,13 @@ def tournament_lobby(tournament_id):
         flash("Please log in first.", "error")
         return redirect(url_for("login"))
 
+    users, tournaments = _load()
+
     if tournament_id not in tournaments:
         flash("Tournament not found.", "error")
         return redirect(url_for("dashboard"))
 
-    username = session["username"]
+    username   = session["username"]
     tournament = tournaments[tournament_id]
 
     if username not in tournament["players"]:
@@ -211,13 +238,14 @@ def tournament_lobby(tournament_id):
 
     host_full_name = users.get(tournament["host"], {}).get("full_name", tournament["host"])
 
-    players_info = []
-    for p in tournament["players"]:
-        players_info.append({
-            "username": p,
+    players_info = [
+        {
+            "username":  p,
             "full_name": users.get(p, {}).get("full_name", p),
-            "is_host": p == tournament["host"]
-        })
+            "is_host":   p == tournament["host"],
+        }
+        for p in tournament["players"]
+    ]
 
     return render_template(
         "tournament_lobby.html",
@@ -225,14 +253,42 @@ def tournament_lobby(tournament_id):
         host=tournament["host"],
         host_full_name=host_full_name,
         players=players_info,
-        current_user=username
+        current_user=username,
+        is_host=(username == tournament["host"]),
     )
 
+
+# ── Tournament: Leave ──────────────────────────────────────────────────────────
+
+@app.route("/leave_tournament/<tournament_id>")
+def leave_tournament(tournament_id):
+    if "username" not in session:
+        return redirect(url_for("login"))
+
+    users, tournaments = _load()
+    username = session["username"]
+
+    if tournament_id in tournaments:
+        tournament = tournaments[tournament_id]
+        if username in tournament["players"]:
+            tournament["players"].remove(username)
+            # If host leaves, delete the whole tournament
+            if username == tournament["host"]:
+                del tournaments[tournament_id]
+                _save(users, tournaments)
+                flash("You ended the tournament as the host.", "success")
+                return redirect(url_for("dashboard"))
+            _save(users, tournaments)
+
+    flash("You have left the lobby.", "success")
+    return redirect(url_for("dashboard"))
+
+
+# ── Logout ─────────────────────────────────────────────────────────────────────
 
 @app.route("/logout")
 def logout():
     session.pop("username", None)
-    session.pop("tournament_id", None)
     flash("You have been logged out.", "success")
     return redirect(url_for("home"))
 
