@@ -720,6 +720,147 @@ def view_league(tournament_id):
         current_user=session["username"]
     )
     
+@app.route("/submit_league_score/<int:match_id>", methods=["POST"])
+def submit_league_score(match_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Fetch the match
+    cursor.execute("SELECT * FROM matches WHERE id = %s AND match_type = 'league'", (match_id,))
+    match = fetchone_as_dict(cursor)
+
+    if not match:
+        conn.close()
+        flash("Match not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    tournament = get_tournament(match["tournament_id"])
+
+    if not tournament or tournament["host"] != session["username"]:
+        conn.close()
+        flash("Only the host can submit scores.", "error")
+        return redirect(url_for("view_league", tournament_id=match["tournament_id"]))
+
+    try:
+        home_goals = int(request.form.get("home_goals", 0))
+        away_goals = int(request.form.get("away_goals", 0))
+    except ValueError:
+        conn.close()
+        flash("Invalid score values.", "error")
+        return redirect(url_for("view_league", tournament_id=match["tournament_id"]))
+
+    # Determine result
+    if home_goals > away_goals:
+        winner = match["home_player"]
+    elif away_goals > home_goals:
+        winner = match["away_player"]
+    else:
+        winner = "draw"
+
+    was_completed = match["status"] == "completed"
+
+    # If match was already completed, reverse the old standings first
+    if was_completed:
+        old_home = match["home_goals"]
+        old_away = match["away_goals"]
+
+        if old_home > old_away:
+            old_winner, old_loser = match["home_player"], match["away_player"]
+            cursor.execute("""
+                UPDATE league_standings
+                SET played = played - 1, wins = wins - 1,
+                    goals_for = goals_for - %s, goals_against = goals_against - %s,
+                    goal_difference = goal_difference - %s, points = points - 3
+                WHERE tournament_id = %s AND username = %s
+            """, (old_home, old_away, old_home - old_away, match["tournament_id"], old_winner))
+            cursor.execute("""
+                UPDATE league_standings
+                SET played = played - 1, losses = losses - 1,
+                    goals_for = goals_for - %s, goals_against = goals_against - %s,
+                    goal_difference = goal_difference - %s
+                WHERE tournament_id = %s AND username = %s
+            """, (old_away, old_home, old_away - old_home, match["tournament_id"], old_loser))
+        elif old_away > old_home:
+            old_winner, old_loser = match["away_player"], match["home_player"]
+            cursor.execute("""
+                UPDATE league_standings
+                SET played = played - 1, wins = wins - 1,
+                    goals_for = goals_for - %s, goals_against = goals_against - %s,
+                    goal_difference = goal_difference - %s, points = points - 3
+                WHERE tournament_id = %s AND username = %s
+            """, (old_away, old_home, old_away - old_home, match["tournament_id"], old_winner))
+            cursor.execute("""
+                UPDATE league_standings
+                SET played = played - 1, losses = losses - 1,
+                    goals_for = goals_for - %s, goals_against = goals_against - %s,
+                    goal_difference = goal_difference - %s
+                WHERE tournament_id = %s AND username = %s
+            """, (old_home, old_away, old_home - old_away, match["tournament_id"], old_loser))
+        else:
+            # old draw
+            for player, gf, ga in [
+                (match["home_player"], old_home, old_away),
+                (match["away_player"], old_away, old_home),
+            ]:
+                cursor.execute("""
+                    UPDATE league_standings
+                    SET played = played - 1, draws = draws - 1,
+                        goals_for = goals_for - %s, goals_against = goals_against - %s,
+                        goal_difference = goal_difference - %s, points = points - 1
+                    WHERE tournament_id = %s AND username = %s
+                """, (gf, ga, gf - ga, match["tournament_id"], player))
+
+    # Apply new result to standings
+    if winner == "draw":
+        for player, gf, ga in [
+            (match["home_player"], home_goals, away_goals),
+            (match["away_player"], away_goals, home_goals),
+        ]:
+            cursor.execute("""
+                UPDATE league_standings
+                SET played = played + 1, draws = draws + 1,
+                    goals_for = goals_for + %s, goals_against = goals_against + %s,
+                    goal_difference = goal_difference + %s, points = points + 1
+                WHERE tournament_id = %s AND username = %s
+            """, (gf, ga, gf - ga, match["tournament_id"], player))
+    else:
+        loser = match["away_player"] if winner == match["home_player"] else match["home_player"]
+        w_gf, w_ga = (home_goals, away_goals) if winner == match["home_player"] else (away_goals, home_goals)
+        l_gf, l_ga = w_ga, w_gf
+
+        cursor.execute("""
+            UPDATE league_standings
+            SET played = played + 1, wins = wins + 1,
+                goals_for = goals_for + %s, goals_against = goals_against + %s,
+                goal_difference = goal_difference + %s, points = points + 3
+            WHERE tournament_id = %s AND username = %s
+        """, (w_gf, w_ga, w_gf - w_ga, match["tournament_id"], winner))
+        cursor.execute("""
+            UPDATE league_standings
+            SET played = played + 1, losses = losses + 1,
+                goals_for = goals_for + %s, goals_against = goals_against + %s,
+                goal_difference = goal_difference + %s
+            WHERE tournament_id = %s AND username = %s
+        """, (l_gf, l_ga, l_gf - l_ga, match["tournament_id"], loser))
+
+    # Update match record
+    cursor.execute("""
+        UPDATE matches
+        SET home_goals = %s, away_goals = %s, winner = %s, status = 'completed'
+        WHERE id = %s
+    """, (home_goals, away_goals, winner, match_id))
+
+    conn.commit()
+    conn.close()
+
+    flash("Score saved successfully.", "success")
+    return redirect(url_for("view_league", tournament_id=match["tournament_id"]))
+
+
 @app.route("/api/lobby_state/<tournament_id>")
 def api_lobby_state(tournament_id):
     from flask import jsonify
