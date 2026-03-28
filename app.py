@@ -489,7 +489,7 @@ def start_tournament(tournament_id):
     cursor.execute("""
         UPDATE tournaments
         SET status = 'started'
-        WHERE tournament_id = %
+        WHERE tournament_id = %s
     """, (tournament_id,))
 
     conn.commit()
