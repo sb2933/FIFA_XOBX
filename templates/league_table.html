@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>League Table - {{ tournament_id }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .page-wrap {
+            max-width: 1100px;
+            margin: 40px auto;
+            padding: 20px;
+            color: white;
+        }
+        .section-box {
+            background: rgba(0,0,0,0.55);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+        th, td {
+            padding: 10px;
+            text-align: center;
+            border-bottom: 1px solid rgba(255,255,255,0.12);
+        }
+        th {
+            font-weight: bold;
+        }
+        .match-card {
+            padding: 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .score-form {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+        .score-form input {
+            width: 70px;
+            padding: 8px;
+            border-radius: 6px;
+            border: none;
+        }
+        .score-form button {
+            padding: 8px 14px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .small-note {
+            opacity: 0.8;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="page-wrap">
+        <div class="section-box">
+            <h2>League Tournament</h2>
+            <p><strong>Tournament ID:</strong> {{ tournament_id }}</p>
+            <p><strong>Host:</strong> {{ tournament.host }}</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="section-box">
+              {% for category, message in messages %}
+                <p>{{ message }}</p>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <div class="section-box">
+            <h3>Standings</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Pos</th>
+                        <th>Player</th>
+                        <th>P</th>
+                        <th>W</th>
+                        <th>D</th>
+                        <th>L</th>
+                        <th>GF</th>
+                        <th>GA</th>
+                        <th>GD</th>
+                        <th>Pts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in standings %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>{{ row.username }}</td>
+                        <td>{{ row.played }}</td>
+                        <td>{{ row.wins }}</td>
+                        <td>{{ row.draws }}</td>
+                        <td>{{ row.losses }}</td>
+                        <td>{{ row.goals_for }}</td>
+                        <td>{{ row.goals_against }}</td>
+                        <td>{{ row.goal_difference }}</td>
+                        <td>{{ row.points }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section-box">
+            <h3>League Fixtures</h3>
+            {% for match in matches %}
+                <div class="match-card">
+                    <strong>{{ match.home_player }}</strong> vs <strong>{{ match.away_player }}</strong>
+                    <div class="small-note">
+                        Status: {{ match.status }}
+                        {% if match.status == 'completed' %}
+                            | Score: {{ match.home_goals }} - {{ match.away_goals }}
+                        {% endif %}
+                    </div>
+
+                    {% if current_user == tournament.host %}
+                        <form action="{{ url_for('submit_league_score', match_id=match.id) }}" method="POST" class="score-form">
+                            <input type="number" name="home_goals" min="0" value="{{ match.home_goals }}">
+                            <span>-</span>
+                            <input type="number" name="away_goals" min="0" value="{{ match.away_goals }}">
+                            <button type="submit">Save Score</button>
+                        </form>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>

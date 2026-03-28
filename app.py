@@ -487,7 +487,7 @@ def start_tournament(tournament_id):
     cursor.execute("""
         UPDATE tournaments
         SET status = 'started'
-        WHERE tournament_id = %s
+        WHERE tournament_id = %
     """, (tournament_id,))
 
     conn.commit()
@@ -536,6 +536,295 @@ def choose_type(tournament_id):
             return redirect(url_for("generate_league", tournament_id=tournament_id))
 
     return render_template("choose_type.html", tournament_id=tournament_id)
+
+@app.route("/generate_league/<tournament_id>")
+def generate_league(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if tournament["host"] != session["username"]:
+        flash("Only the host can generate league fixtures.", "error")
+        return redirect(url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT username
+        FROM tournament_players
+        WHERE tournament_id = %s
+        ORDER BY username
+    """, (tournament_id,))
+    players = [row[0] for row in cursor.fetchall()]
+
+    if len(players) < 2:
+        conn.close()
+        flash("At least 2 players are required for a league.", "error")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    # Prevent duplicate generation
+    cursor.execute("""
+        SELECT 1 FROM matches
+        WHERE tournament_id = %s AND match_type = 'league'
+        LIMIT 1
+    """, (tournament_id,))
+    existing_match = cursor.fetchone()
+
+    if existing_match:
+        conn.close()
+        return redirect(url_for("view_league", tournament_id=tournament_id))
+
+    # Create standings rows
+    for player in players:
+        cursor.execute("""
+            INSERT INTO league_standings (tournament_id, username)
+            VALUES (%s, %s)
+            ON CONFLICT (tournament_id, username) DO NOTHING
+        """, (tournament_id, player))
+
+    # Double round-robin: every pair plays twice
+    sequence = 1
+    for i in range(len(players)):
+        for j in range(len(players)):
+            if i != j:
+                cursor.execute("""
+                    INSERT INTO matches (
+                        tournament_id, round_name, home_player, away_player,
+                        match_type, status, sequence_order
+                    )
+                    VALUES (%s, %s, %s, %s, 'league', 'pending', %s)
+                """, (
+                    tournament_id,
+                    "League Stage",
+                    players[i],
+                    players[j],
+                    sequence
+                ))
+                sequence += 1
+
+    conn.commit()
+    conn.close()
+
+    flash("League fixtures generated successfully.", "success")
+    return redirect(url_for("view_league", tournament_id=tournament_id))
+@app.route("/league/<tournament_id>")
+def view_league(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Check user is part of tournament
+    cursor.execute("""
+        SELECT 1 FROM tournament_players
+        WHERE tournament_id = %s AND username = %s
+    """, (tournament_id, session["username"]))
+    member = cursor.fetchone()
+
+    if not member:
+        conn.close()
+        flash("You are not part of this tournament.", "error")
+        return redirect(url_for("dashboard"))
+
+    # Standings
+    cursor.execute("""
+        SELECT *
+        FROM league_standings
+        WHERE tournament_id = %s
+        ORDER BY points DESC, goal_difference DESC, goals_for DESC, username ASC
+    """, (tournament_id,))
+    standings = fetchall_as_dicts(cursor)
+
+    # Fixtures
+    cursor.execute("""
+        SELECT *
+        FROM matches
+        WHERE tournament_id = %s AND match_type = 'league'
+        ORDER BY sequence_order ASC
+    """, (tournament_id,))
+    matches = fetchall_as_dicts(cursor)
+
+    conn.close()
+
+    return render_template(
+        "league_table.html",
+        tournament_id=tournament_id,
+        tournament=tournament,
+        standings=standings,
+        matches=matches,
+        current_user=session["username"]
+    )
+@app.route("/submit_league_score/<int:match_id>", methods=["POST"])
+def submit_league_score(match_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    home_goals = request.form.get("home_goals", "").strip()
+    away_goals = request.form.get("away_goals", "").strip()
+
+    if home_goals == "" or away_goals == "":
+        flash("Both score fields are required.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    try:
+        home_goals = int(home_goals)
+        away_goals = int(away_goals)
+    except ValueError:
+        flash("Scores must be numbers.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    if home_goals < 0 or away_goals < 0:
+        flash("Scores cannot be negative.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT * FROM matches
+        WHERE id = %s AND match_type = 'league'
+    """, (match_id,))
+    match = fetchone_as_dict(cursor)
+
+    if not match:
+        conn.close()
+        flash("Match not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    tournament = get_tournament(match["tournament_id"])
+
+    if not tournament or tournament["host"] != session["username"]:
+        conn.close()
+        flash("Only the host can enter scores.", "error")
+        return redirect(url_for("view_league", tournament_id=match["tournament_id"]))
+
+    # Update match result
+    cursor.execute("""
+        UPDATE matches
+        SET home_goals = %s,
+            away_goals = %s,
+            status = 'completed'
+        WHERE id = %s
+    """, (home_goals, away_goals, match_id))
+
+    # Recalculate standings from scratch for this tournament
+    cursor.execute("""
+        UPDATE league_standings
+        SET played = 0,
+            wins = 0,
+            draws = 0,
+            losses = 0,
+            goals_for = 0,
+            goals_against = 0,
+            goal_difference = 0,
+            points = 0
+        WHERE tournament_id = %s
+    """, (match["tournament_id"],))
+
+    cursor.execute("""
+        SELECT *
+        FROM matches
+        WHERE tournament_id = %s
+          AND match_type = 'league'
+          AND status = 'completed'
+    """, (match["tournament_id"],))
+    completed_matches = fetchall_as_dicts(cursor)
+
+    for m in completed_matches:
+        home = m["home_player"]
+        away = m["away_player"]
+        hg = m["home_goals"]
+        ag = m["away_goals"]
+
+        # Played / goals
+        cursor.execute("""
+            UPDATE league_standings
+            SET played = played + 1,
+                goals_for = goals_for + %s,
+                goals_against = goals_against + %s
+            WHERE tournament_id = %s AND username = %s
+        """, (hg, ag, match["tournament_id"], home))
+
+        cursor.execute("""
+            UPDATE league_standings
+            SET played = played + 1,
+                goals_for = goals_for + %s,
+                goals_against = goals_against + %s
+            WHERE tournament_id = %s AND username = %s
+        """, (ag, hg, match["tournament_id"], away))
+
+        # Result
+        if hg > ag:
+            cursor.execute("""
+                UPDATE league_standings
+                SET wins = wins + 1,
+                    points = points + 3
+                WHERE tournament_id = %s AND username = %s
+            """, (match["tournament_id"], home))
+
+            cursor.execute("""
+                UPDATE league_standings
+                SET losses = losses + 1
+                WHERE tournament_id = %s AND username = %s
+            """, (match["tournament_id"], away))
+
+        elif ag > hg:
+            cursor.execute("""
+                UPDATE league_standings
+                SET wins = wins + 1,
+                    points = points + 3
+                WHERE tournament_id = %s AND username = %s
+            """, (match["tournament_id"], away))
+
+            cursor.execute("""
+                UPDATE league_standings
+                SET losses = losses + 1
+                WHERE tournament_id = %s AND username = %s
+            """, (match["tournament_id"], home))
+
+        else:
+            cursor.execute("""
+                UPDATE league_standings
+                SET draws = draws + 1,
+                    points = points + 1
+                WHERE tournament_id = %s AND username = %s
+            """, (match["tournament_id"], home))
+
+            cursor.execute("""
+                UPDATE league_standings
+                SET draws = draws + 1,
+                    points = points + 1
+                WHERE tournament_id = %s AND username = %s
+            """, (match["tournament_id"], away))
+
+    # Recompute goal difference
+    cursor.execute("""
+        UPDATE league_standings
+        SET goal_difference = goals_for - goals_against
+        WHERE tournament_id = %s
+    """, (match["tournament_id"],))
+
+    conn.commit()
+    conn.close()
+
+    flash("Match result saved and standings updated.", "success")
+    return redirect(url_for("view_league", tournament_id=match["tournament_id"]))
 
 @app.route("/logout")
 def logout():
