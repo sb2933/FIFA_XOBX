@@ -413,7 +413,9 @@ def tournament_lobby(tournament_id):
         host=tournament["host"],
         host_full_name=host_full_name,
         players=players_info,
-        current_user=username
+        current_user=username,
+        tournament_status=tournament.get("status", "waiting"),
+        tournament_type=tournament.get("tournament_type"),
     )
 
 @app.route("/kick/<tournament_id>/<username>", methods=["POST"])
@@ -651,21 +653,12 @@ def view_knockout(tournament_id):
 
     bye_player = tournament.get("bye_player")
 
-    # bye_is_finalist: bye_player has already won a match (they're the stored finalist waiting for Final)
-    # In that case their name appears in all_matches already. Original bye never appears in a match yet.
-    all_players_in_matches = set()
-    for m in all_matches:
-        all_players_in_matches.add(m["home_player"])
-        all_players_in_matches.add(m["away_player"])
-    bye_is_finalist = bool(bye_player and bye_player in all_players_in_matches)
-
     return render_template(
         "knockout.html",
         tournament_id=tournament_id,
         tournament=tournament,
         rounds=rounds,
         bye_player=bye_player,
-        bye_is_finalist=bye_is_finalist,
         current_user=session["username"]
     )
 
@@ -745,18 +738,13 @@ def submit_knockout_score(match_id):
     if all_done:
         # Collect winners with their goals scored (for bye seeding)
         winners_data = []
-        losers_data = []
         for m in round_matches:
             if m["id"] == match_id:
-                w = winner
-                l = match["away_player"] if home_goals > away_goals else match["home_player"]
-                wg = winner_goals
+                winners_data.append({"player": winner, "goals": winner_goals})
             else:
                 w = m["winner"]
-                l = m["away_player"] if m["winner"] == m["home_player"] else m["home_player"]
-                wg = m["home_goals"] if m["winner"] == m["home_player"] else m["away_goals"]
-            winners_data.append({"player": w, "goals": wg})
-            losers_data.append({"player": l})
+                g = m["home_goals"] if m["winner"] == m["home_player"] else m["away_goals"]
+                winners_data.append({"player": w, "goals": g})
 
         bye_player = tournament.get("bye_player")
 
@@ -770,115 +758,46 @@ def submit_knockout_score(match_id):
         seq = (cursor.fetchone()[0] or 0) + 1
 
         if bye_player:
-            # ── BYE SCENARIOS ──────────────────────────────────────────────
-            num_winners = len(winners_data)
+            # Sort winners by goals scored ascending — lowest scorer plays the bye player
+            winners_data_sorted = sorted(winners_data, key=lambda x: x["goals"])
+            bye_opponent = winners_data_sorted[0]["player"]   # lowest scorer faces bye player
+            remaining = [w["player"] for w in winners_data_sorted[1:]]  # rest go to final
 
-            # Detect whether bye_player is a "stored finalist" waiting for the Final,
-            # vs an original bye who hasn't played yet this round.
-            # A stored finalist is NOT present in the current round's matches.
-            bye_in_this_round = any(
-                m["home_player"] == bye_player or m["away_player"] == bye_player
-                for m in round_matches
-            )
-            # Stored finalist scenario: bye_player not in this round AND it's not Round 1
-            is_stored_finalist = (not bye_in_this_round) and (current_round_num > 1) and (num_winners == 1)
+            # Bye player vs lowest scorer
+            cursor.execute("""
+                INSERT INTO matches (
+                    tournament_id, round_name, home_player, away_player,
+                    match_type, status, sequence_order
+                ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
+            """, (tid, next_round, bye_player, bye_opponent, seq))
+            seq += 1
 
-            if is_stored_finalist:
-                # Semi just finished — create the Final between stored finalist and semi winner
-                semi_winner = winners_data[0]["player"]
-                finalist    = bye_player
+            # Clear bye now — next round is even
+            cursor.execute("""
+                UPDATE tournaments SET bye_player = NULL WHERE tournament_id = %s
+            """, (tid,))
 
-                final_round = f"Round {current_round_num + 1}"
+            # Pair remaining winners together
+            for i in range(0, len(remaining) - 1, 2):
                 cursor.execute("""
                     INSERT INTO matches (
                         tournament_id, round_name, home_player, away_player,
                         match_type, status, sequence_order
                     ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
-                """, (tid, final_round, finalist, semi_winner, seq))
-
-                cursor.execute("""
-                    UPDATE tournaments SET bye_player = NULL WHERE tournament_id = %s
-                """, (tid,))
-
-            elif num_winners == 1:
-                # 3-player scenario — Round 1 just finished (1 match → 1 winner, 1 loser).
-                # bye_player (who waited) plays the LOSER in the semi.
-                # Round-1 winner stored as the "direct finalist" in bye_player column.
-                round1_winner = winners_data[0]["player"]
-                round1_loser  = losers_data[0]["player"]
-
-                # Semi: bye player vs loser
-                cursor.execute("""
-                    INSERT INTO matches (
-                        tournament_id, round_name, home_player, away_player,
-                        match_type, status, sequence_order
-                    ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
-                """, (tid, next_round, bye_player, round1_loser, seq))
+                """, (tid, next_round, remaining[i], remaining[i + 1], seq))
                 seq += 1
-
-                # Store Round-1 winner as the waiting finalist
-                cursor.execute("""
-                    UPDATE tournaments SET bye_player = %s WHERE tournament_id = %s
-                """, (round1_winner, tid))
-
-            else:
-                # 5-player scenario (or any odd count > 3):
-                # Multiple winners — sort by goals descending.
-                # High scorer(s) → go straight to next round paired together.
-                # Low scorer → plays bye player.
-                winners_sorted_desc = sorted(winners_data, key=lambda x: x["goals"], reverse=True)
-
-                low_scorer  = winners_sorted_desc[-1]["player"]   # fewest goals → faces bye
-                high_scorers = [w["player"] for w in winners_sorted_desc[:-1]]  # rest → advance directly
-
-                # Bye player vs low scorer
-                cursor.execute("""
-                    INSERT INTO matches (
-                        tournament_id, round_name, home_player, away_player,
-                        match_type, status, sequence_order
-                    ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
-                """, (tid, next_round, bye_player, low_scorer, seq))
-                seq += 1
-
-                # Clear bye — next round has bye_player playing, no more waiting
-                cursor.execute("""
-                    UPDATE tournaments SET bye_player = NULL WHERE tournament_id = %s
-                """, (tid,))
-
-                # Pair high scorers together (they advance directly)
-                for i in range(0, len(high_scorers) - 1, 2):
-                    cursor.execute("""
-                        INSERT INTO matches (
-                            tournament_id, round_name, home_player, away_player,
-                            match_type, status, sequence_order
-                        ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
-                    """, (tid, next_round, high_scorers[i], high_scorers[i + 1], seq))
-                    seq += 1
-
-                # If one high scorer is left over (odd), they get a bye into the Final
-                if len(high_scorers) % 2 == 1:
-                    cursor.execute("""
-                        UPDATE tournaments SET bye_player = %s WHERE tournament_id = %s
-                    """, (high_scorers[-1], tid))
 
         else:
-            # ── NO BYE — NORMAL PAIRING ────────────────────────────────────
             all_winners = [w["player"] for w in winners_data]
 
             if len(all_winners) == 1:
-                # Final is done — crown champion
+                # Tournament over — crown the champion
                 cursor.execute("""
                     UPDATE tournaments SET status = 'finished', winner = %s
                     WHERE tournament_id = %s
                 """, (all_winners[0], tid))
-
-            elif len(all_winners) == 0:
-                # 3-player semi just finished — the direct finalist is stored in bye_player
-                # This branch won't be reached here because bye_player was set; handled above.
-                pass
-
             else:
-                # Even number of winners — pair them up
+                # Standard pairing — pair winners in order
                 for i in range(0, len(all_winners) - 1, 2):
                     cursor.execute("""
                         INSERT INTO matches (
@@ -888,11 +807,12 @@ def submit_knockout_score(match_id):
                     """, (tid, next_round, all_winners[i], all_winners[i + 1], seq))
                     seq += 1
 
-                # Safety: if odd winners remain, last one gets a bye
+                # If still odd after pairing (shouldn't happen often but safe)
                 if len(all_winners) % 2 == 1:
+                    new_bye = all_winners[-1]
                     cursor.execute("""
                         UPDATE tournaments SET bye_player = %s WHERE tournament_id = %s
-                    """, (all_winners[-1], tid))
+                    """, (new_bye, tid))
 
     conn.commit()
     conn.close()
@@ -1190,6 +1110,40 @@ def submit_league_score(match_id):
     flash("Match result saved and standings updated.", "success")
     return redirect(url_for("view_league", tournament_id=match["tournament_id"]))
     
+@app.route("/api/lobby_state/<tournament_id>")
+def api_lobby_state(tournament_id):
+    from flask import jsonify
+    if "username" not in session:
+        return jsonify({"error": "not logged in"}), 401
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT username FROM tournament_players WHERE tournament_id = %s ORDER BY username", (tournament_id,))
+    players = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT status, tournament_type FROM tournaments WHERE tournament_id = %s", (tournament_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"players": players, "player_count": len(players), "status": row[0], "tournament_type": row[1]})
+
+
+@app.route("/api/match_state/<tournament_id>")
+def api_match_state(tournament_id):
+    from flask import jsonify
+    import hashlib
+    if "username" not in session:
+        return jsonify({"error": "not logged in"}), 401
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, status, home_goals, away_goals, winner FROM matches WHERE tournament_id = %s ORDER BY id ASC", (tournament_id,))
+    rows = cursor.fetchall()
+    cursor.execute("SELECT status, winner, bye_player FROM tournaments WHERE tournament_id = %s", (tournament_id,))
+    t_row = cursor.fetchone()
+    conn.close()
+    fingerprint = hashlib.md5(str(rows).encode() + str(t_row).encode()).hexdigest()
+    return jsonify({"fingerprint": fingerprint, "tournament_status": t_row[0] if t_row else None})
+
+
 @app.route("/logout")
 def logout():
     session.pop("username", None)

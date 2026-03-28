@@ -134,14 +134,36 @@
                             <input type="number" name="away_goals" min="0" value="{{ match.away_goals }}">
                             <button type="submit">Save Score</button>
                         </form>
-                    {% else %}
-                        <div class="small-note">
-                           Only the host can update match scores.
-                        </div>
                     {% endif %}
                 </div>
             {% endfor %}
         </div>
     </div>
+
+  <script>
+    (function () {
+      const parts = window.location.pathname.split('/').filter(Boolean);
+      const tid = parts[parts.length - 1];
+      let fingerprint = null;
+
+      async function poll() {
+        try {
+          const res = await fetch('/api/match_state/' + tid);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (fingerprint === null) {
+            fingerprint = data.fingerprint;
+            return;
+          }
+          if (data.fingerprint !== fingerprint) {
+            location.reload();
+          }
+        } catch (e) {}
+      }
+
+      poll();
+      setInterval(poll, 3000);
+    })();
+  </script>
 </body>
 </html>
