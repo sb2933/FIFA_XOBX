@@ -484,11 +484,10 @@ def start_tournament(tournament_id):
         flash("At least 2 players are required to start the tournament.", "error")
         return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
 
-    cursor.execute("""
-        UPDATE tournaments
-        SET status = 'started'
-        WHERE tournament_id = %
-    """, (tournament_id,))
+    cursor.execute(
+    "UPDATE tournaments SET status = 'started' WHERE tournament_id = %s",
+    (tournament_id,)
+)
 
     conn.commit()
     conn.close()
@@ -825,7 +824,7 @@ def submit_league_score(match_id):
 
     flash("Match result saved and standings updated.", "success")
     return redirect(url_for("view_league", tournament_id=match["tournament_id"]))
-
+    
 @app.route("/logout")
 def logout():
     session.pop("username", None)
