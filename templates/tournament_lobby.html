@@ -284,5 +284,32 @@
 
   </div>
 
+
+  <script>
+    (function () {
+      const tid = window.location.pathname.split('/').filter(Boolean).pop();
+      let playerCount = null;
+      let status = null;
+
+      async function poll() {
+        try {
+          const res = await fetch('/api/lobby_state/' + tid);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (playerCount === null) {
+            playerCount = data.player_count;
+            status = data.status;
+            return;
+          }
+          if (data.player_count !== playerCount || data.status !== status) {
+            location.reload();
+          }
+        } catch (e) {}
+      }
+
+      poll();
+      setInterval(poll, 3000);
+    })();
+  </script>
 </body>
 </html>

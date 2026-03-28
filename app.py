@@ -413,7 +413,13 @@ def tournament_lobby(tournament_id):
         host=tournament["host"],
         host_full_name=host_full_name,
         players=players_info,
+<<<<<<< HEAD
         current_user=username
+=======
+        current_user=username,
+        tournament_status=tournament.get("status", "waiting"),
+        tournament_type=tournament.get("tournament_type"),
+>>>>>>> fae4494e19141965ff488675ce3552b78bb6c585
     )
 
 @app.route("/kick/<tournament_id>/<username>", methods=["POST"])
@@ -718,6 +724,40 @@ def view_league(tournament_id):
         current_user=session["username"]
     )
     
+@app.route("/api/lobby_state/<tournament_id>")
+def api_lobby_state(tournament_id):
+    from flask import jsonify
+    if "username" not in session:
+        return jsonify({"error": "not logged in"}), 401
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT username FROM tournament_players WHERE tournament_id = %s ORDER BY username", (tournament_id,))
+    players = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT status, tournament_type FROM tournaments WHERE tournament_id = %s", (tournament_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"players": players, "player_count": len(players), "status": row[0], "tournament_type": row[1]})
+
+
+@app.route("/api/match_state/<tournament_id>")
+def api_match_state(tournament_id):
+    from flask import jsonify
+    import hashlib
+    if "username" not in session:
+        return jsonify({"error": "not logged in"}), 401
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, status, home_goals, away_goals, winner FROM matches WHERE tournament_id = %s ORDER BY id ASC", (tournament_id,))
+    rows = cursor.fetchall()
+    cursor.execute("SELECT status, winner, bye_player FROM tournaments WHERE tournament_id = %s", (tournament_id,))
+    t_row = cursor.fetchone()
+    conn.close()
+    fingerprint = hashlib.md5(str(rows).encode() + str(t_row).encode()).hexdigest()
+    return jsonify({"fingerprint": fingerprint, "tournament_status": t_row[0] if t_row else None})
+
+
 @app.route("/logout")
 def logout():
     session.pop("username", None)
