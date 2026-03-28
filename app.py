@@ -413,13 +413,9 @@ def tournament_lobby(tournament_id):
         host=tournament["host"],
         host_full_name=host_full_name,
         players=players_info,
-<<<<<<< HEAD
-        current_user=username
-=======
         current_user=username,
         tournament_status=tournament.get("status", "waiting"),
         tournament_type=tournament.get("tournament_type"),
->>>>>>> fae4494e19141965ff488675ce3552b78bb6c585
     )
 
 @app.route("/kick/<tournament_id>/<username>", methods=["POST"])
