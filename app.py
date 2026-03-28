@@ -1,14 +1,45 @@
+import sqlite3
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 
 app = Flask(__name__)
 app.secret_key = "fifa_secret_key"
 
-# Temporary user storage
-users = {}
+DATABASE = "fifa_users.db"
 MAX_USERS = 20
 
 # Tournament storage: { tournament_id: { password, host, players: [username, ...] } }
 tournaments = {}
+
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def get_user_by_username(username):
+    conn = get_db_connection()
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    return user
 
 
 @app.route("/")
@@ -29,28 +60,40 @@ def signup():
             flash("All fields are required.", "error")
             return redirect(url_for("signup"))
 
-        if len(users) >= MAX_USERS:
-            flash("Maximum number of players reached.", "error")
-            return redirect(url_for("signup"))
-
-        if username in users:
-            flash("Username already exists.", "error")
-            return redirect(url_for("signup"))
-
-        for user_data in users.values():
-            if user_data["email"] == email:
-                flash("Email already registered.", "error")
-                return redirect(url_for("signup"))
-
         if password != confirm_password:
             flash("Passwords do not match.", "error")
             return redirect(url_for("signup"))
 
-        users[username] = {
-            "full_name": full_name,
-            "email": email,
-            "password": password
-        }
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) AS total FROM users")
+        total_users = cursor.fetchone()["total"]
+
+        if total_users >= MAX_USERS:
+            conn.close()
+            flash("Maximum number of players reached.", "error")
+            return redirect(url_for("signup"))
+
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        if cursor.fetchone():
+            conn.close()
+            flash("Username already exists.", "error")
+            return redirect(url_for("signup"))
+
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+        if cursor.fetchone():
+            conn.close()
+            flash("Email already registered.", "error")
+            return redirect(url_for("signup"))
+
+        cursor.execute("""
+            INSERT INTO users (full_name, username, email, password)
+            VALUES (?, ?, ?, ?)
+        """, (full_name, username, email, password))
+
+        conn.commit()
+        conn.close()
 
         flash("Account created successfully. Please log in.", "success")
         return redirect(url_for("login"))
@@ -68,8 +111,17 @@ def login():
             flash("Please enter all required fields.", "error")
             return redirect(url_for("login"))
 
-        if username in users and users[username]["password"] == password:
-            session["username"] = username
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM users WHERE username = ? AND password = ?",
+            (username, password)
+        )
+        user = cursor.fetchone()
+        conn.close()
+
+        if user:
+            session["username"] = user["username"]
             flash("Login successful.", "success")
             return redirect(url_for("dashboard"))
         else:
@@ -94,17 +146,29 @@ def forgot_password():
             flash("Passwords do not match.", "error")
             return redirect(url_for("forgot_password"))
 
-        found_user = None
-        for username, user_data in users.items():
-            if username == username_or_email or user_data["email"] == username_or_email:
-                found_user = username
-                break
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-        if not found_user:
+        cursor.execute("""
+            SELECT * FROM users
+            WHERE username = ? OR email = ?
+        """, (username_or_email, username_or_email))
+        user = cursor.fetchone()
+
+        if not user:
+            conn.close()
             flash("User not found.", "error")
             return redirect(url_for("forgot_password"))
 
-        users[found_user]["password"] = new_password
+        cursor.execute("""
+            UPDATE users
+            SET password = ?
+            WHERE username = ? OR email = ?
+        """, (new_password, username_or_email, username_or_email))
+
+        conn.commit()
+        conn.close()
+
         flash("Password reset successful. Please log in.", "success")
         return redirect(url_for("login"))
 
@@ -117,12 +181,15 @@ def dashboard():
         flash("Please log in first.", "error")
         return redirect(url_for("login"))
 
-    username = session["username"]
-    user = users.get(username)
-    return render_template("dashboard.html", user=user, username=username)
+    user = get_user_by_username(session["username"])
 
+    if not user:
+        session.pop("username", None)
+        flash("User not found. Please log in again.", "error")
+        return redirect(url_for("login"))
 
-# ── Tournament: Create ─────────────────────────────────────────────────────────
+    return render_template("dashboard.html", user=user)
+
 
 @app.route("/create_tournament", methods=["GET", "POST"])
 def create_tournament():
@@ -156,8 +223,6 @@ def create_tournament():
     return render_template("create_tournament.html")
 
 
-# ── Tournament: Join ───────────────────────────────────────────────────────────
-
 @app.route("/join_tournament", methods=["GET", "POST"])
 def join_tournament():
     if "username" not in session:
@@ -190,8 +255,6 @@ def join_tournament():
     return render_template("join_tournament.html")
 
 
-# ── Tournament: Lobby ──────────────────────────────────────────────────────────
-
 @app.route("/tournament/<tournament_id>")
 def tournament_lobby(tournament_id):
     if "username" not in session:
@@ -209,13 +272,15 @@ def tournament_lobby(tournament_id):
         flash("You are not part of this tournament.", "error")
         return redirect(url_for("dashboard"))
 
-    host_full_name = users.get(tournament["host"], {}).get("full_name", tournament["host"])
+    host_user = get_user_by_username(tournament["host"])
+    host_full_name = host_user["full_name"] if host_user else tournament["host"]
 
     players_info = []
     for p in tournament["players"]:
+        player_user = get_user_by_username(p)
         players_info.append({
             "username": p,
-            "full_name": users.get(p, {}).get("full_name", p),
+            "full_name": player_user["full_name"] if player_user else p,
             "is_host": p == tournament["host"]
         })
 
@@ -238,4 +303,5 @@ def logout():
 
 
 if __name__ == "__main__":
+    init_db()
     app.run(debug=True)
