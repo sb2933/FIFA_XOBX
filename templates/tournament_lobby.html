@@ -245,21 +245,38 @@
         </div>
       {% endfor %}
     </div>
-         {% if current_user == host %}
-      <div class="host-controls">
-        <div class="section-label" style="margin-bottom:0;">Host Controls</div>
-        <div class="host-actions">
-          <form action="{{ url_for('start_tournament', tournament_id=tournament_id) }}" method="POST">
-            <button type="submit" class="btn-primary">Start Tournament</button>
-          </form>
-        </div>
+         {% if tournament_status == "waiting" %}
+  {% if current_user == host %}
+    <div class="host-controls">
+      <div class="section-label" style="margin-bottom:0;">Host Controls</div>
+      <div class="host-actions">
+        <form action="{{ url_for('start_tournament', tournament_id=tournament_id) }}" method="POST">
+          <button type="submit" class="btn-primary">Start Tournament</button>
+        </form>
       </div>
-    {% else %}
-      <div class="waiting-box">
-        Waiting for the host to start the tournament...
-      </div>
-    {% endif %}
-    
+    </div>
+  {% else %}
+    <div class="waiting-box">
+      Waiting for the host to start the tournament...
+    </div>
+  {% endif %}
+{% elif tournament_status == "started" %}
+  <div class="host-controls">
+    <div class="section-label" style="margin-bottom:0;">Tournament Started</div>
+    <div class="host-actions">
+      {% if tournament_type == "league" %}
+        <a href="{{ url_for('view_league', tournament_id=tournament_id) }}" class="btn-primary" style="text-decoration:none;display:inline-block;">
+          View League Table & Fixtures
+        </a>
+      {% elif tournament_type == "knockout" %}
+        <a href="{{ url_for('view_knockout', tournament_id=tournament_id) }}" class="btn-primary" style="text-decoration:none;display:inline-block;">
+          View Knockout Bracket
+        </a>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
     <p class="refresh-hint">
       Waiting for more players?
       <a href="/tournament/{{ tournament_id }}">Refresh lobby</a>

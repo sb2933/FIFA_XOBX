@@ -134,6 +134,10 @@
                             <input type="number" name="away_goals" min="0" value="{{ match.away_goals }}">
                             <button type="submit">Save Score</button>
                         </form>
+                    {% else %}
+                        <div class="small-note">
+                           Only the host can update match scores.
+                        </div>
                     {% endif %}
                 </div>
             {% endfor %}

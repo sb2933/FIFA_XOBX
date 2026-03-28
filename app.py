@@ -408,13 +408,15 @@ def tournament_lobby(tournament_id):
         })
 
     return render_template(
-        "tournament_lobby.html",
-        tournament_id=tournament_id,
-        host=tournament["host"],
-        host_full_name=host_full_name,
-        players=players_info,
-        current_user=username
-    )
+    "tournament_lobby.html",
+    tournament_id=tournament_id,
+    host=tournament["host"],
+    host_full_name=host_full_name,
+    players=players_info,
+    current_user=username,
+    tournament_status=tournament.get("status", "waiting"),
+    tournament_type=tournament.get("tournament_type")
+)
 
 @app.route("/kick/<tournament_id>/<username>", methods=["POST"])
 def kick_player(tournament_id, username):
