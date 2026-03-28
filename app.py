@@ -536,6 +536,223 @@ def choose_type(tournament_id):
 
     return render_template("choose_type.html", tournament_id=tournament_id)
 
+@app.route("/generate_knockout/<tournament_id>")
+def generate_knockout(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if tournament["host"] != session["username"]:
+        flash("Only the host can generate knockout fixtures.", "error")
+        return redirect(url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT username
+        FROM tournament_players
+        WHERE tournament_id = %s
+        ORDER BY RANDOM()
+    """, (tournament_id,))
+    players = [row[0] for row in cursor.fetchall()]
+
+    if len(players) < 2:
+        conn.close()
+        flash("At least 2 players are required for a knockout.", "error")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    # Prevent duplicate generation
+    cursor.execute("""
+        SELECT 1 FROM matches
+        WHERE tournament_id = %s AND match_type = 'knockout'
+        LIMIT 1
+    """, (tournament_id,))
+    if cursor.fetchone():
+        conn.close()
+        return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+    # Generate first-round matches
+    import math
+    num_players = len(players)
+    next_power_of_2 = 2 ** math.ceil(math.log2(num_players))
+    byes = next_power_of_2 - num_players
+
+    round_name = "Round 1"
+    sequence = 1
+    paired = []
+
+    # Players with byes go straight through — pair remaining players
+    bye_players = players[:byes]
+    active_players = players[byes:]
+
+    for i in range(0, len(active_players) - 1, 2):
+        cursor.execute("""
+            INSERT INTO matches (
+                tournament_id, round_name, home_player, away_player,
+                match_type, status, sequence_order
+            )
+            VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
+        """, (tournament_id, round_name, active_players[i], active_players[i + 1], sequence))
+        sequence += 1
+
+    conn.commit()
+    conn.close()
+
+    flash("Knockout fixtures generated successfully.", "success")
+    return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+
+@app.route("/knockout/<tournament_id>")
+def view_knockout(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT 1 FROM tournament_players
+        WHERE tournament_id = %s AND username = %s
+    """, (tournament_id, session["username"]))
+    if not cursor.fetchone():
+        conn.close()
+        flash("You are not part of this tournament.", "error")
+        return redirect(url_for("dashboard"))
+
+    cursor.execute("""
+        SELECT * FROM matches
+        WHERE tournament_id = %s AND match_type = 'knockout'
+        ORDER BY sequence_order ASC
+    """, (tournament_id,))
+    matches = fetchall_as_dicts(cursor)
+    conn.close()
+
+    return render_template(
+        "knockout.html",
+        tournament_id=tournament_id,
+        tournament=tournament,
+        matches=matches,
+        current_user=session["username"]
+    )
+
+
+@app.route("/submit_knockout_score/<int:match_id>", methods=["POST"])
+def submit_knockout_score(match_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    home_goals = request.form.get("home_goals", "").strip()
+    away_goals = request.form.get("away_goals", "").strip()
+
+    if home_goals == "" or away_goals == "":
+        flash("Both score fields are required.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    try:
+        home_goals = int(home_goals)
+        away_goals = int(away_goals)
+    except ValueError:
+        flash("Scores must be numbers.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    if home_goals < 0 or away_goals < 0:
+        flash("Scores cannot be negative.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    if home_goals == away_goals:
+        flash("Knockout matches cannot end in a draw. Enter a decisive score.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT * FROM matches WHERE id = %s AND match_type = 'knockout'
+    """, (match_id,))
+    match = fetchone_as_dict(cursor)
+
+    if not match:
+        conn.close()
+        flash("Match not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    tournament = get_tournament(match["tournament_id"])
+    if not tournament or tournament["host"] != session["username"]:
+        conn.close()
+        flash("Only the host can enter scores.", "error")
+        return redirect(url_for("view_knockout", tournament_id=match["tournament_id"]))
+
+    winner = match["home_player"] if home_goals > away_goals else match["away_player"]
+
+    cursor.execute("""
+        UPDATE matches
+        SET home_goals = %s, away_goals = %s, winner = %s, status = 'completed'
+        WHERE id = %s
+    """, (home_goals, away_goals, winner, match_id))
+
+    # Check if all current-round matches are done; if so, generate next round
+    cursor.execute("""
+        SELECT * FROM matches
+        WHERE tournament_id = %s AND match_type = 'knockout' AND round_name = %s
+    """, (match["tournament_id"], match["round_name"]))
+    round_matches = fetchall_as_dicts(cursor)
+
+    # Temporarily mark current match as completed for the check
+    all_done = all(
+        (m["status"] == "completed" or m["id"] == match_id)
+        for m in round_matches
+    )
+
+    if all_done:
+        winners = [
+            (m["winner"] if m["id"] != match_id else winner)
+            for m in round_matches
+        ]
+        if len(winners) > 1:
+            # Generate next round
+            import math
+            round_number = int(match["round_name"].replace("Round ", "") or 1) + 1
+            next_round = f"Round {round_number}"
+            sequence = cursor.execute("""
+                SELECT COALESCE(MAX(sequence_order), 0) FROM matches
+                WHERE tournament_id = %s
+            """, (match["tournament_id"],)) or 0
+            cursor.execute("""
+                SELECT COALESCE(MAX(sequence_order), 0) FROM matches WHERE tournament_id = %s
+            """, (match["tournament_id"],))
+            seq = (cursor.fetchone()[0] or 0) + 1
+
+            for i in range(0, len(winners) - 1, 2):
+                cursor.execute("""
+                    INSERT INTO matches (
+                        tournament_id, round_name, home_player, away_player,
+                        match_type, status, sequence_order
+                    ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
+                """, (match["tournament_id"], next_round, winners[i], winners[i + 1], seq))
+                seq += 1
+
+    conn.commit()
+    conn.close()
+
+    flash("Knockout result saved.", "success")
+    return redirect(url_for("view_knockout", tournament_id=match["tournament_id"]))
+
+
 @app.route("/generate_league/<tournament_id>")
 def generate_league(tournament_id):
     if "username" not in session:
