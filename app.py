@@ -7,9 +7,6 @@ app.secret_key = "fifa_secret_key"
 DATABASE = "fifa_users.db"
 MAX_USERS = 20
 
-# Tournament storage: { tournament_id: { password, host, players: [username, ...] } }
-tournaments = {}
-
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE)
@@ -31,6 +28,26 @@ def init_db():
         )
     """)
 
+    # Tournaments table — replaces the in-memory dict
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tournaments (
+            tournament_id TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            host TEXT NOT NULL
+        )
+    """)
+
+    # Tournament players join table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tournament_players (
+            tournament_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            PRIMARY KEY (tournament_id, username),
+            FOREIGN KEY (tournament_id) REFERENCES tournaments(tournament_id),
+            FOREIGN KEY (username) REFERENCES users(username)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -40,6 +57,24 @@ def get_user_by_username(username):
     user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
     conn.close()
     return user
+
+
+def get_tournament(tournament_id):
+    conn = get_db_connection()
+    tournament = conn.execute(
+        "SELECT * FROM tournaments WHERE tournament_id = ?", (tournament_id,)
+    ).fetchone()
+    conn.close()
+    return tournament
+
+
+def get_tournament_players(tournament_id):
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT username FROM tournament_players WHERE tournament_id = ?", (tournament_id,)
+    ).fetchall()
+    conn.close()
+    return [r["username"] for r in rows]
 
 
 @app.route("/")
@@ -205,16 +240,31 @@ def create_tournament():
             flash("Tournament ID and password are required.", "error")
             return redirect(url_for("create_tournament"))
 
-        if tournament_id in tournaments:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        existing = cursor.execute(
+            "SELECT 1 FROM tournaments WHERE tournament_id = ?", (tournament_id,)
+        ).fetchone()
+
+        if existing:
+            conn.close()
             flash("A tournament with that ID already exists.", "error")
             return redirect(url_for("create_tournament"))
 
         username = session["username"]
-        tournaments[tournament_id] = {
-            "password": tournament_password,
-            "host": username,
-            "players": [username]
-        }
+
+        cursor.execute(
+            "INSERT INTO tournaments (tournament_id, password, host) VALUES (?, ?, ?)",
+            (tournament_id, tournament_password, username)
+        )
+        cursor.execute(
+            "INSERT INTO tournament_players (tournament_id, username) VALUES (?, ?)",
+            (tournament_id, username)
+        )
+
+        conn.commit()
+        conn.close()
 
         session["tournament_id"] = tournament_id
         flash(f'Tournament "{tournament_id}" created!', "success")
@@ -237,17 +287,27 @@ def join_tournament():
             flash("Tournament ID and password are required.", "error")
             return redirect(url_for("join_tournament"))
 
-        if tournament_id not in tournaments:
+        tournament = get_tournament(tournament_id)
+
+        if not tournament:
             flash("Tournament not found.", "error")
             return redirect(url_for("join_tournament"))
 
-        if tournaments[tournament_id]["password"] != tournament_password:
+        if tournament["password"] != tournament_password:
             flash("Incorrect tournament password.", "error")
             return redirect(url_for("join_tournament"))
 
         username = session["username"]
-        if username not in tournaments[tournament_id]["players"]:
-            tournaments[tournament_id]["players"].append(username)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # INSERT OR IGNORE so joining twice is safe
+        cursor.execute(
+            "INSERT OR IGNORE INTO tournament_players (tournament_id, username) VALUES (?, ?)",
+            (tournament_id, username)
+        )
+        conn.commit()
+        conn.close()
 
         session["tournament_id"] = tournament_id
         return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
@@ -261,14 +321,16 @@ def tournament_lobby(tournament_id):
         flash("Please log in first.", "error")
         return redirect(url_for("login"))
 
-    if tournament_id not in tournaments:
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
         flash("Tournament not found.", "error")
         return redirect(url_for("dashboard"))
 
     username = session["username"]
-    tournament = tournaments[tournament_id]
+    players = get_tournament_players(tournament_id)
 
-    if username not in tournament["players"]:
+    if username not in players:
         flash("You are not part of this tournament.", "error")
         return redirect(url_for("dashboard"))
 
@@ -276,7 +338,7 @@ def tournament_lobby(tournament_id):
     host_full_name = host_user["full_name"] if host_user else tournament["host"]
 
     players_info = []
-    for p in tournament["players"]:
+    for p in players:
         player_user = get_user_by_username(p)
         players_info.append({
             "username": p,
