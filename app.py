@@ -1,10 +1,12 @@
 import sqlite3
+import os
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 
 app = Flask(__name__)
 app.secret_key = "fifa_secret_key"
 
-DATABASE = "fifa_users.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE = os.path.join(BASE_DIR, "fifa_users.db")
 MAX_USERS = 20
 
 
