@@ -408,15 +408,13 @@ def tournament_lobby(tournament_id):
         })
 
     return render_template(
-    "tournament_lobby.html",
-    tournament_id=tournament_id,
-    host=tournament["host"],
-    host_full_name=host_full_name,
-    players=players_info,
-    current_user=username,
-    tournament_status=tournament.get("status", "waiting"),
-    tournament_type=tournament.get("tournament_type")
-)
+        "tournament_lobby.html",
+        tournament_id=tournament_id,
+        host=tournament["host"],
+        host_full_name=host_full_name,
+        players=players_info,
+        current_user=username
+    )
 
 @app.route("/kick/<tournament_id>/<username>", methods=["POST"])
 def kick_player(tournament_id, username):
@@ -653,12 +651,21 @@ def view_knockout(tournament_id):
 
     bye_player = tournament.get("bye_player")
 
+    # bye_is_finalist: bye_player has already won a match (they're the stored finalist waiting for Final)
+    # In that case their name appears in all_matches already. Original bye never appears in a match yet.
+    all_players_in_matches = set()
+    for m in all_matches:
+        all_players_in_matches.add(m["home_player"])
+        all_players_in_matches.add(m["away_player"])
+    bye_is_finalist = bool(bye_player and bye_player in all_players_in_matches)
+
     return render_template(
         "knockout.html",
         tournament_id=tournament_id,
         tournament=tournament,
         rounds=rounds,
         bye_player=bye_player,
+        bye_is_finalist=bye_is_finalist,
         current_user=session["username"]
     )
 
@@ -738,13 +745,18 @@ def submit_knockout_score(match_id):
     if all_done:
         # Collect winners with their goals scored (for bye seeding)
         winners_data = []
+        losers_data = []
         for m in round_matches:
             if m["id"] == match_id:
-                winners_data.append({"player": winner, "goals": winner_goals})
+                w = winner
+                l = match["away_player"] if home_goals > away_goals else match["home_player"]
+                wg = winner_goals
             else:
                 w = m["winner"]
-                g = m["home_goals"] if m["winner"] == m["home_player"] else m["away_goals"]
-                winners_data.append({"player": w, "goals": g})
+                l = m["away_player"] if m["winner"] == m["home_player"] else m["home_player"]
+                wg = m["home_goals"] if m["winner"] == m["home_player"] else m["away_goals"]
+            winners_data.append({"player": w, "goals": wg})
+            losers_data.append({"player": l})
 
         bye_player = tournament.get("bye_player")
 
@@ -758,46 +770,115 @@ def submit_knockout_score(match_id):
         seq = (cursor.fetchone()[0] or 0) + 1
 
         if bye_player:
-            # Sort winners by goals scored ascending — lowest scorer plays the bye player
-            winners_data_sorted = sorted(winners_data, key=lambda x: x["goals"])
-            bye_opponent = winners_data_sorted[0]["player"]   # lowest scorer faces bye player
-            remaining = [w["player"] for w in winners_data_sorted[1:]]  # rest go to final
+            # ── BYE SCENARIOS ──────────────────────────────────────────────
+            num_winners = len(winners_data)
 
-            # Bye player vs lowest scorer
-            cursor.execute("""
-                INSERT INTO matches (
-                    tournament_id, round_name, home_player, away_player,
-                    match_type, status, sequence_order
-                ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
-            """, (tid, next_round, bye_player, bye_opponent, seq))
-            seq += 1
+            # Detect whether bye_player is a "stored finalist" waiting for the Final,
+            # vs an original bye who hasn't played yet this round.
+            # A stored finalist is NOT present in the current round's matches.
+            bye_in_this_round = any(
+                m["home_player"] == bye_player or m["away_player"] == bye_player
+                for m in round_matches
+            )
+            # Stored finalist scenario: bye_player not in this round AND it's not Round 1
+            is_stored_finalist = (not bye_in_this_round) and (current_round_num > 1) and (num_winners == 1)
 
-            # Clear bye now — next round is even
-            cursor.execute("""
-                UPDATE tournaments SET bye_player = NULL WHERE tournament_id = %s
-            """, (tid,))
+            if is_stored_finalist:
+                # Semi just finished — create the Final between stored finalist and semi winner
+                semi_winner = winners_data[0]["player"]
+                finalist    = bye_player
 
-            # Pair remaining winners together
-            for i in range(0, len(remaining) - 1, 2):
+                final_round = f"Round {current_round_num + 1}"
                 cursor.execute("""
                     INSERT INTO matches (
                         tournament_id, round_name, home_player, away_player,
                         match_type, status, sequence_order
                     ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
-                """, (tid, next_round, remaining[i], remaining[i + 1], seq))
+                """, (tid, final_round, finalist, semi_winner, seq))
+
+                cursor.execute("""
+                    UPDATE tournaments SET bye_player = NULL WHERE tournament_id = %s
+                """, (tid,))
+
+            elif num_winners == 1:
+                # 3-player scenario — Round 1 just finished (1 match → 1 winner, 1 loser).
+                # bye_player (who waited) plays the LOSER in the semi.
+                # Round-1 winner stored as the "direct finalist" in bye_player column.
+                round1_winner = winners_data[0]["player"]
+                round1_loser  = losers_data[0]["player"]
+
+                # Semi: bye player vs loser
+                cursor.execute("""
+                    INSERT INTO matches (
+                        tournament_id, round_name, home_player, away_player,
+                        match_type, status, sequence_order
+                    ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
+                """, (tid, next_round, bye_player, round1_loser, seq))
                 seq += 1
 
+                # Store Round-1 winner as the waiting finalist
+                cursor.execute("""
+                    UPDATE tournaments SET bye_player = %s WHERE tournament_id = %s
+                """, (round1_winner, tid))
+
+            else:
+                # 5-player scenario (or any odd count > 3):
+                # Multiple winners — sort by goals descending.
+                # High scorer(s) → go straight to next round paired together.
+                # Low scorer → plays bye player.
+                winners_sorted_desc = sorted(winners_data, key=lambda x: x["goals"], reverse=True)
+
+                low_scorer  = winners_sorted_desc[-1]["player"]   # fewest goals → faces bye
+                high_scorers = [w["player"] for w in winners_sorted_desc[:-1]]  # rest → advance directly
+
+                # Bye player vs low scorer
+                cursor.execute("""
+                    INSERT INTO matches (
+                        tournament_id, round_name, home_player, away_player,
+                        match_type, status, sequence_order
+                    ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
+                """, (tid, next_round, bye_player, low_scorer, seq))
+                seq += 1
+
+                # Clear bye — next round has bye_player playing, no more waiting
+                cursor.execute("""
+                    UPDATE tournaments SET bye_player = NULL WHERE tournament_id = %s
+                """, (tid,))
+
+                # Pair high scorers together (they advance directly)
+                for i in range(0, len(high_scorers) - 1, 2):
+                    cursor.execute("""
+                        INSERT INTO matches (
+                            tournament_id, round_name, home_player, away_player,
+                            match_type, status, sequence_order
+                        ) VALUES (%s, %s, %s, %s, 'knockout', 'pending', %s)
+                    """, (tid, next_round, high_scorers[i], high_scorers[i + 1], seq))
+                    seq += 1
+
+                # If one high scorer is left over (odd), they get a bye into the Final
+                if len(high_scorers) % 2 == 1:
+                    cursor.execute("""
+                        UPDATE tournaments SET bye_player = %s WHERE tournament_id = %s
+                    """, (high_scorers[-1], tid))
+
         else:
+            # ── NO BYE — NORMAL PAIRING ────────────────────────────────────
             all_winners = [w["player"] for w in winners_data]
 
             if len(all_winners) == 1:
-                # Tournament over — crown the champion
+                # Final is done — crown champion
                 cursor.execute("""
                     UPDATE tournaments SET status = 'finished', winner = %s
                     WHERE tournament_id = %s
                 """, (all_winners[0], tid))
+
+            elif len(all_winners) == 0:
+                # 3-player semi just finished — the direct finalist is stored in bye_player
+                # This branch won't be reached here because bye_player was set; handled above.
+                pass
+
             else:
-                # Standard pairing — pair winners in order
+                # Even number of winners — pair them up
                 for i in range(0, len(all_winners) - 1, 2):
                     cursor.execute("""
                         INSERT INTO matches (
@@ -807,12 +888,11 @@ def submit_knockout_score(match_id):
                     """, (tid, next_round, all_winners[i], all_winners[i + 1], seq))
                     seq += 1
 
-                # If still odd after pairing (shouldn't happen often but safe)
+                # Safety: if odd winners remain, last one gets a bye
                 if len(all_winners) % 2 == 1:
-                    new_bye = all_winners[-1]
                     cursor.execute("""
                         UPDATE tournaments SET bye_player = %s WHERE tournament_id = %s
-                    """, (new_bye, tid))
+                    """, (all_winners[-1], tid))
 
     conn.commit()
     conn.close()

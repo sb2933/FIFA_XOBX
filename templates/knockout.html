@@ -9,21 +9,14 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --green: #00d26a; --dark: #0a0f0d; --card: #111a14;
-      --border: #1e2e22; --muted: #4a6350; --white: #e8f0ea;
-      --red: #ff4560; --gold: #ffc800;
+      --border: #1e2e22; --muted: #4a6350; --white: #e8f0ea; --red: #ff4560;
+      --gold: #ffc800;
     }
     body { background: var(--dark); color: var(--white); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
 
-    nav {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 1.2rem 2.5rem; border-bottom: 1px solid var(--border);
-    }
+    nav { display: flex; justify-content: space-between; align-items: center; padding: 1.2rem 2.5rem; border-bottom: 1px solid var(--border); }
     .nav-logo { font-family: 'Bebas Neue', sans-serif; font-size: 1.8rem; letter-spacing: 3px; color: var(--green); }
-    .btn-dash {
-      background: transparent; border: 1px solid var(--border); color: var(--muted);
-      padding: .45rem 1.1rem; border-radius: 6px; font-family: 'DM Sans', sans-serif;
-      font-size: .85rem; cursor: pointer; text-decoration: none; transition: border-color .2s, color .2s;
-    }
+    .btn-dash { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: .45rem 1.1rem; border-radius: 6px; font-family: 'DM Sans', sans-serif; font-size: .85rem; cursor: pointer; text-decoration: none; transition: border-color .2s, color .2s; }
     .btn-dash:hover { border-color: var(--green); color: var(--green); }
 
     .main { max-width: 860px; margin: 0 auto; padding: 3rem 2rem; }
@@ -33,37 +26,33 @@
     .flash.success { background: rgba(0,210,106,.1); border: 1px solid rgba(0,210,106,.3); color: var(--green); }
     .flash.error   { background: rgba(255,69,96,.1);  border: 1px solid rgba(255,69,96,.3);  color: var(--red); }
 
-    /* ── Header ── */
     .t-header {
       background: var(--card); border: 1px solid var(--border); border-radius: 16px;
       padding: 2rem 2.2rem; display: flex; align-items: center; justify-content: space-between;
       gap: 1rem; margin-bottom: 2rem; flex-wrap: wrap;
     }
     .t-label { font-size: .72rem; letter-spacing: 3px; text-transform: uppercase; color: var(--green); margin-bottom: .4rem; }
-    .t-id    { font-family: 'Bebas Neue', sans-serif; font-size: 2.6rem; letter-spacing: 3px; }
-    .t-sub   { color: var(--muted); font-size: .88rem; margin-top: .3rem; }
+    .t-id { font-family: 'Bebas Neue', sans-serif; font-size: 2.6rem; letter-spacing: 3px; }
+    .t-sub { color: var(--muted); font-size: .88rem; margin-top: .3rem; }
     .host-badge { display: flex; flex-direction: column; align-items: flex-end; gap: .3rem; }
     .host-label { font-size: .72rem; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); }
-    .host-name  { font-family: 'Bebas Neue', sans-serif; font-size: 1.5rem; letter-spacing: 1px; }
+    .host-name { font-family: 'Bebas Neue', sans-serif; font-size: 1.5rem; letter-spacing: 1px; }
 
-    /* ── Champion banner ── */
     .winner-banner {
       background: linear-gradient(135deg, rgba(255,200,0,.18), rgba(255,200,0,.05));
       border: 1px solid rgba(255,200,0,.4); border-radius: 16px;
       padding: 2rem; text-align: center; margin-bottom: 2rem;
     }
+    .winner-banner .w-label { font-size: .72rem; letter-spacing: 3px; text-transform: uppercase; color: var(--gold); margin-bottom: .6rem; }
+    .winner-banner .w-name { font-family: 'Bebas Neue', sans-serif; font-size: 3rem; letter-spacing: 3px; color: var(--gold); }
     .winner-banner .w-trophy { font-size: 2.5rem; margin-bottom: .5rem; }
-    .winner-banner .w-label  { font-size: .72rem; letter-spacing: 3px; text-transform: uppercase; color: var(--gold); margin-bottom: .6rem; }
-    .winner-banner .w-name   { font-family: 'Bebas Neue', sans-serif; font-size: 3rem; letter-spacing: 3px; color: var(--gold); }
 
-    /* ── Bye notice ── */
     .bye-notice {
       background: rgba(255,200,0,.08); border: 1px solid rgba(255,200,0,.25);
       border-radius: 10px; padding: .9rem 1.2rem; font-size: .88rem;
       color: var(--gold); margin-bottom: 2rem;
     }
 
-    /* ── Round sections ── */
     .round-block { margin-bottom: 2.4rem; }
     .round-title {
       font-family: 'Bebas Neue', sans-serif; font-size: 1.5rem; letter-spacing: 2px;
@@ -71,7 +60,6 @@
       padding-left: .8rem; margin-bottom: 1rem;
     }
 
-    /* ── Match card ── */
     .match-card {
       background: var(--card); border: 1px solid var(--border); border-radius: 12px;
       padding: 1.2rem 1.5rem; margin-bottom: .9rem;
@@ -79,10 +67,10 @@
       gap: 1rem; flex-wrap: wrap; transition: border-color .2s;
     }
     .match-card:hover { border-color: #2e4535; }
-    .match-card.completed { border-color: rgba(0,210,106,.25); }
+    .match-card.completed { border-color: rgba(0,210,106,.2); }
 
-    .match-players { display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 200px; }
-    .p-name { font-weight: 700; font-size: .95rem; }
+    .match-players { display: flex; align-items: center; gap: 1rem; flex: 1; }
+    .p-name { font-weight: 700; font-size: .95rem; min-width: 100px; }
     .p-name.winner { color: var(--green); }
     .p-name.loser  { color: var(--muted); text-decoration: line-through; }
 
@@ -94,26 +82,23 @@
 
     .score-display {
       font-family: 'Bebas Neue', sans-serif; font-size: 1.8rem;
-      letter-spacing: 2px; color: var(--white); min-width: 70px; text-align: center; flex-shrink: 0;
+      letter-spacing: 2px; color: var(--white); min-width: 70px; text-align: center;
     }
 
     .status-pill {
       font-size: .7rem; font-weight: 700; letter-spacing: 1px;
-      text-transform: uppercase; padding: .25rem .75rem; border-radius: 20px; flex-shrink: 0;
+      text-transform: uppercase; padding: .25rem .7rem; border-radius: 20px; flex-shrink: 0;
     }
     .status-pill.pending   { background: rgba(255,200,0,.12); color: var(--gold); }
     .status-pill.completed { background: rgba(0,210,106,.12); color: var(--green); }
 
-    /* ── Score form (host only) ── */
     .score-form { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
     .score-form input[type=number] {
       width: 58px; background: var(--dark); border: 1px solid var(--border);
       color: var(--white); font-family: 'Bebas Neue', sans-serif; font-size: 1.2rem;
       padding: .45rem .5rem; border-radius: 7px; text-align: center;
-      outline: none; transition: border-color .2s; -moz-appearance: textfield;
+      outline: none; transition: border-color .2s;
     }
-    .score-form input::-webkit-outer-spin-button,
-    .score-form input::-webkit-inner-spin-button { -webkit-appearance: none; }
     .score-form input:focus { border-color: var(--green); }
     .score-form .dash { color: var(--muted); font-size: 1.1rem; font-weight: 700; }
     .btn-save {
@@ -123,11 +108,9 @@
     }
     .btn-save:hover { opacity: .85; }
 
-    .empty-state { color: var(--muted); text-align: center; margin-top: 3rem; font-size: .95rem; }
-
     @media (max-width: 600px) {
       .match-card { flex-direction: column; align-items: flex-start; }
-      .t-header   { flex-direction: column; }
+      .t-header { flex-direction: column; }
       .host-badge { align-items: flex-start; }
     }
   </style>
@@ -151,7 +134,6 @@
       {% endif %}
     {% endwith %}
 
-    <!-- Header -->
     <div class="t-header">
       <div>
         <div class="t-label">Knockout Tournament</div>
@@ -164,7 +146,6 @@
       </div>
     </div>
 
-    <!-- Champion banner -->
     {% if tournament.status == 'finished' and tournament.winner %}
       <div class="winner-banner">
         <div class="w-trophy">🏆</div>
@@ -173,45 +154,42 @@
       </div>
     {% endif %}
 
-    <!-- Bye notice (shown to everyone) -->
     {% if bye_player %}
-      <div class="bye-notice">
-        ⏳ <strong>{{ bye_player }}</strong> has a bye this round and will wait for their next opponent.
-        Once all Round 1 matches are done, they will face the player who scored the <em>fewest</em> goals — that match-up happens in the next round.
-      </div>
+      {% if bye_is_finalist %}
+        <div class="bye-notice">
+          🏆 <strong>{{ bye_player }}</strong> has already advanced to the <strong>Final</strong> — waiting for the semi-final winner.
+        </div>
+      {% else %}
+        <div class="bye-notice">
+          ⏳ <strong>{{ bye_player }}</strong> has a bye this round and is waiting.
+          {% if rounds|length == 1 %}
+            Once Round 1 finishes, they will play the <em>loser</em> — and the winner of that match meets the Round 1 winner in the Final.
+          {% else %}
+            Once all current matches finish, they will face the winner who scored the <em>fewest goals</em>. The highest scorer advances directly to the next round.
+          {% endif %}
+        </div>
+      {% endif %}
     {% endif %}
 
-    <!-- Rounds -->
     {% if rounds %}
       {% for round_name, matches in rounds.items() %}
         <div class="round-block">
           <div class="round-title">{{ round_name }}</div>
-
           {% for match in matches %}
             <div class="match-card {{ match.status }}">
-
-              <!-- Players -->
               <div class="match-players">
-                <span class="p-name
-                  {%- if match.winner == match.home_player %} winner
-                  {%- elif match.winner and match.winner != match.home_player %} loser
-                  {%- endif %}">
+                <span class="p-name{% if match.winner == match.home_player %} winner{% elif match.winner and match.winner != match.home_player %} loser{% endif %}">
                   {{ match.home_player }}
                 </span>
                 <span class="vs-pill">VS</span>
-                <span class="p-name
-                  {%- if match.winner == match.away_player %} winner
-                  {%- elif match.winner and match.winner != match.away_player %} loser
-                  {%- endif %}">
+                <span class="p-name{% if match.winner == match.away_player %} winner{% elif match.winner and match.winner != match.away_player %} loser{% endif %}">
                   {{ match.away_player }}
                 </span>
               </div>
 
-              <!-- Result or form -->
               {% if match.status == 'completed' %}
                 <div class="score-display">{{ match.home_goals }} – {{ match.away_goals }}</div>
                 <span class="status-pill completed">✓ Done</span>
-
               {% else %}
                 {% if current_user == tournament.host %}
                   <form class="score-form" method="POST"
@@ -230,9 +208,8 @@
           {% endfor %}
         </div>
       {% endfor %}
-
     {% else %}
-      <p class="empty-state">No matches have been generated yet.</p>
+      <p style="color:var(--muted);text-align:center;margin-top:3rem;">No matches generated yet.</p>
     {% endif %}
 
   </div>
