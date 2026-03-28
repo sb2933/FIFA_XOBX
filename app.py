@@ -47,6 +47,51 @@ def init_db():
             FOREIGN KEY (username) REFERENCES users(username)
         )
     """)
+    cursor.execute("""
+        ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'waiting'
+    """)
+
+    cursor.execute("""
+        ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS tournament_type TEXT
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS matches (
+            id SERIAL PRIMARY KEY,
+            tournament_id TEXT NOT NULL,
+            round_name TEXT,
+            home_player TEXT NOT NULL,
+            away_player TEXT NOT NULL,
+            home_goals INTEGER DEFAULT 0,
+            away_goals INTEGER DEFAULT 0,
+            winner TEXT,
+            match_type TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            sequence_order INTEGER,
+            FOREIGN KEY (tournament_id) REFERENCES tournaments(tournament_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS league_standings (
+            id SERIAL PRIMARY KEY,
+            tournament_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            played INTEGER DEFAULT 0,
+            wins INTEGER DEFAULT 0,
+            draws INTEGER DEFAULT 0,
+            losses INTEGER DEFAULT 0,
+            goals_for INTEGER DEFAULT 0,
+            goals_against INTEGER DEFAULT 0,
+            goal_difference INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            UNIQUE (tournament_id, username),
+            FOREIGN KEY (tournament_id) REFERENCES tournaments(tournament_id),
+            FOREIGN KEY (username) REFERENCES users(username)
+        )
+    """)
 
     conn.commit()
     conn.close()
@@ -303,6 +348,10 @@ def join_tournament():
         if not tournament:
             flash("Tournament not found.", "error")
             return redirect(url_for("join_tournament"))
+        
+        if tournament["status"] != "waiting":
+           flash("Tournament already started. Joining is closed.", "error")
+           return redirect(url_for("join_tournament"))
 
         if tournament["password"] != tournament_password:
             flash("Incorrect tournament password.", "error")
@@ -367,6 +416,126 @@ def tournament_lobby(tournament_id):
         current_user=username
     )
 
+@app.route("/kick/<tournament_id>/<username>", methods=["POST"])
+def kick_player(tournament_id, username):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if tournament["host"] != session["username"]:
+        flash("Only the host can kick players.", "error")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    if tournament.get("status") != "waiting":
+        flash("Cannot kick players after tournament has started.", "error")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    if username == session["username"]:
+        flash("Host cannot remove themselves.", "error")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM tournament_players
+        WHERE tournament_id = %s AND username = %s
+    """, (tournament_id, username))
+
+    conn.commit()
+    conn.close()
+
+    flash(f"{username} was removed from the tournament.", "success")
+    return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+@app.route("/start/<tournament_id>", methods=["POST"])
+def start_tournament(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if tournament["host"] != session["username"]:
+        flash("Only the host can start the tournament.", "error")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT COUNT(*) FROM tournament_players
+        WHERE tournament_id = %s
+    """, (tournament_id,))
+    player_count = cursor.fetchone()[0]
+
+    if player_count < 2:
+        conn.close()
+        flash("At least 2 players are required to start the tournament.", "error")
+        return redirect(url_for("tournament_lobby", tournament_id=tournament_id))
+
+    cursor.execute("""
+        UPDATE tournaments
+        SET status = 'started'
+        WHERE tournament_id = %s
+    """, (tournament_id,))
+
+    conn.commit()
+    conn.close()
+
+    flash("Tournament started. Choose tournament type.", "success")
+    return redirect(url_for("choose_type", tournament_id=tournament_id))
+@app.route("/choose/<tournament_id>", methods=["GET", "POST"])
+def choose_type(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if tournament["host"] != session["username"]:
+        flash("Only the host can choose the tournament type.", "error")
+        return redirect(url_for("dashboard"))
+
+    if request.method == "POST":
+        tournament_type = request.form.get("tournament_type")
+
+        if tournament_type not in ["knockout", "league"]:
+            flash("Invalid tournament type selected.", "error")
+            return redirect(url_for("choose_type", tournament_id=tournament_id))
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE tournaments
+            SET tournament_type = %s
+            WHERE tournament_id = %s
+        """, (tournament_type, tournament_id))
+
+        conn.commit()
+        conn.close()
+
+        if tournament_type == "knockout":
+            return redirect(url_for("generate_knockout", tournament_id=tournament_id))
+        else:
+            return redirect(url_for("generate_league", tournament_id=tournament_id))
+
+    return render_template("choose_type.html", tournament_id=tournament_id)
 
 @app.route("/logout")
 def logout():

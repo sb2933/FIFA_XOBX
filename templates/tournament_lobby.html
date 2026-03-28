@@ -127,6 +127,66 @@
 
     .refresh-hint { font-size: .8rem; color: var(--muted); margin-top: 1.6rem; display: flex; align-items: center; gap: .5rem; }
     .refresh-hint a { color: var(--green); text-decoration: none; font-weight: 700; }
+
+        /* HOST CONTROLS */
+    .host-controls {
+      margin-top: 2rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.4rem 1.5rem;
+    }
+
+    .host-actions {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: 1rem;
+    }
+
+    .btn-primary {
+      background: var(--green);
+      color: #08110c;
+      border: none;
+      padding: .8rem 1.2rem;
+      border-radius: 8px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity .2s ease;
+    }
+
+    .btn-primary:hover {
+      opacity: .9;
+    }
+
+    .btn-kick {
+      margin-top: .75rem;
+      background: transparent;
+      color: var(--red);
+      border: 1px solid rgba(255,69,96,.35);
+      padding: .45rem .8rem;
+      border-radius: 6px;
+      font-size: .78rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+    }
+
+    .btn-kick:hover {
+      background: rgba(255,69,96,.08);
+      border-color: var(--red);
+    }
+
+    .waiting-box {
+      margin-top: 2rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.1rem 1.3rem;
+      color: var(--muted);
+      font-size: .92rem;
+    }
+
   </style>
 </head>
 <body>
@@ -177,10 +237,29 @@
           {% elif player.username == current_user %}
             <div class="badge badge-you">You</div>
           {% endif %}
+          {% if current_user == host and not player.is_host %}
+            <form action="{{ url_for('kick_player', tournament_id=tournament_id, username=player.username) }}" method="POST">
+            <button type="submit" class="btn-kick">Kick Player</button>
+            </form>
+          {% endif %}
         </div>
       {% endfor %}
     </div>
-
+         {% if current_user == host %}
+      <div class="host-controls">
+        <div class="section-label" style="margin-bottom:0;">Host Controls</div>
+        <div class="host-actions">
+          <form action="{{ url_for('start_tournament', tournament_id=tournament_id) }}" method="POST">
+            <button type="submit" class="btn-primary">Start Tournament</button>
+          </form>
+        </div>
+      </div>
+    {% else %}
+      <div class="waiting-box">
+        Waiting for the host to start the tournament...
+      </div>
+    {% endif %}
+    
     <p class="refresh-hint">
       Waiting for more players?
       <a href="/tournament/{{ tournament_id }}">Refresh lobby</a>
