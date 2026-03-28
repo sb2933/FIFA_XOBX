@@ -1,18 +1,18 @@
-import sqlite3
 import os
+import psycopg2
+import psycopg2.extras
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 
 app = Flask(__name__)
 app.secret_key = "fifa_secret_key"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE = os.path.join(BASE_DIR, "fifa_users.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")  # Railway sets this automatically
 MAX_USERS = 20
 
 
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False
     return conn
 
 
@@ -22,7 +22,7 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             full_name TEXT NOT NULL,
             username TEXT NOT NULL UNIQUE,
             email TEXT NOT NULL UNIQUE,
@@ -30,7 +30,6 @@ def init_db():
         )
     """)
 
-    # Tournaments table — replaces the in-memory dict
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tournaments (
             tournament_id TEXT PRIMARY KEY,
@@ -39,7 +38,6 @@ def init_db():
         )
     """)
 
-    # Tournament players join table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tournament_players (
             tournament_id TEXT NOT NULL,
@@ -54,27 +52,44 @@ def init_db():
     conn.close()
 
 
+def fetchone_as_dict(cursor):
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    cols = [desc[0] for desc in cursor.description]
+    return dict(zip(cols, row))
+
+
+def fetchall_as_dicts(cursor):
+    cols = [desc[0] for desc in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
 def get_user_by_username(username):
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+    user = fetchone_as_dict(cursor)
     conn.close()
     return user
 
 
 def get_tournament(tournament_id):
     conn = get_db_connection()
-    tournament = conn.execute(
-        "SELECT * FROM tournaments WHERE tournament_id = ?", (tournament_id,)
-    ).fetchone()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tournaments WHERE tournament_id = %s", (tournament_id,))
+    tournament = fetchone_as_dict(cursor)
     conn.close()
     return tournament
 
 
 def get_tournament_players(tournament_id):
     conn = get_db_connection()
-    rows = conn.execute(
-        "SELECT username FROM tournament_players WHERE tournament_id = ?", (tournament_id,)
-    ).fetchall()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT username FROM tournament_players WHERE tournament_id = %s", (tournament_id,)
+    )
+    rows = fetchall_as_dicts(cursor)
     conn.close()
     return [r["username"] for r in rows]
 
@@ -104,21 +119,21 @@ def signup():
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        cursor.execute("SELECT COUNT(*) AS total FROM users")
-        total_users = cursor.fetchone()["total"]
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
 
         if total_users >= MAX_USERS:
             conn.close()
             flash("Maximum number of players reached.", "error")
             return redirect(url_for("signup"))
 
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        cursor.execute("SELECT 1 FROM users WHERE username = %s", (username,))
         if cursor.fetchone():
             conn.close()
             flash("Username already exists.", "error")
             return redirect(url_for("signup"))
 
-        cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+        cursor.execute("SELECT 1 FROM users WHERE email = %s", (email,))
         if cursor.fetchone():
             conn.close()
             flash("Email already registered.", "error")
@@ -126,7 +141,7 @@ def signup():
 
         cursor.execute("""
             INSERT INTO users (full_name, username, email, password)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         """, (full_name, username, email, password))
 
         conn.commit()
@@ -151,10 +166,10 @@ def login():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM users WHERE username = ? AND password = ?",
+            "SELECT * FROM users WHERE username = %s AND password = %s",
             (username, password)
         )
-        user = cursor.fetchone()
+        user = fetchone_as_dict(cursor)
         conn.close()
 
         if user:
@@ -187,10 +202,9 @@ def forgot_password():
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT * FROM users
-            WHERE username = ? OR email = ?
+            SELECT * FROM users WHERE username = %s OR email = %s
         """, (username_or_email, username_or_email))
-        user = cursor.fetchone()
+        user = fetchone_as_dict(cursor)
 
         if not user:
             conn.close()
@@ -198,9 +212,7 @@ def forgot_password():
             return redirect(url_for("forgot_password"))
 
         cursor.execute("""
-            UPDATE users
-            SET password = ?
-            WHERE username = ? OR email = ?
+            UPDATE users SET password = %s WHERE username = %s OR email = %s
         """, (new_password, username_or_email, username_or_email))
 
         conn.commit()
@@ -245,11 +257,8 @@ def create_tournament():
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        existing = cursor.execute(
-            "SELECT 1 FROM tournaments WHERE tournament_id = ?", (tournament_id,)
-        ).fetchone()
-
-        if existing:
+        cursor.execute("SELECT 1 FROM tournaments WHERE tournament_id = %s", (tournament_id,))
+        if cursor.fetchone():
             conn.close()
             flash("A tournament with that ID already exists.", "error")
             return redirect(url_for("create_tournament"))
@@ -257,11 +266,11 @@ def create_tournament():
         username = session["username"]
 
         cursor.execute(
-            "INSERT INTO tournaments (tournament_id, password, host) VALUES (?, ?, ?)",
+            "INSERT INTO tournaments (tournament_id, password, host) VALUES (%s, %s, %s)",
             (tournament_id, tournament_password, username)
         )
         cursor.execute(
-            "INSERT INTO tournament_players (tournament_id, username) VALUES (?, ?)",
+            "INSERT INTO tournament_players (tournament_id, username) VALUES (%s, %s)",
             (tournament_id, username)
         )
 
@@ -303,11 +312,12 @@ def join_tournament():
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # INSERT OR IGNORE so joining twice is safe
-        cursor.execute(
-            "INSERT OR IGNORE INTO tournament_players (tournament_id, username) VALUES (?, ?)",
-            (tournament_id, username)
-        )
+        cursor.execute("""
+            INSERT INTO tournament_players (tournament_id, username)
+            VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
+        """, (tournament_id, username))
+
         conn.commit()
         conn.close()
 
