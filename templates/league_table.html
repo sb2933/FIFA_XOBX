@@ -67,6 +67,18 @@
             <h2>League Tournament</h2>
             <p><strong>Tournament ID:</strong> {{ tournament_id }}</p>
             <p><strong>Host:</strong> {{ tournament.host }}</p>
+            <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+                <a href="{{ url_for('points_leaderboard', tournament_id=tournament_id) }}"
+                   style="padding:8px 16px;background:#ffc800;color:#0a0f0d;border-radius:7px;font-weight:700;text-decoration:none;font-size:.85rem;">
+                    Points Leaderboard
+                </a>
+                {% if current_user == tournament.host %}
+                <a href="{{ url_for('assign_points', tournament_id=tournament_id) }}"
+                   style="padding:8px 16px;background:#00d26a;color:#08110c;border-radius:7px;font-weight:700;text-decoration:none;font-size:.85rem;">
+                    Assign Points
+                </a>
+                {% endif %}
+            </div>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -127,6 +139,14 @@
                         {% endif %}
                     </div>
 
+                    {% if match.status != 'completed' %}
+                    <div style="margin-top:6px;">
+                        <a href="{{ url_for('place_bet', match_id=match.id) }}"
+                           style="display:inline-block;padding:5px 12px;background:rgba(255,200,0,.15);border:1px solid rgba(255,200,0,.4);color:#ffc800;border-radius:6px;font-size:.8rem;font-weight:700;text-decoration:none;">
+                            Place Bet
+                        </a>
+                    </div>
+                    {% endif %}
                     {% if current_user == tournament.host %}
                         <form action="{{ url_for('submit_league_score', match_id=match.id) }}" method="POST" class="score-form">
                             <input type="number" name="home_goals" min="0" value="{{ match.home_goals }}">

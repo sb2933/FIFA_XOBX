@@ -58,6 +58,21 @@ def init_db():
     """)
 
     cursor.execute("""
+        ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS winner TEXT
+    """)
+
+    cursor.execute("""
+        ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS bye_player TEXT
+    """)
+
+    cursor.execute("""
+        ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS finalist_player TEXT
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS matches (
             id SERIAL PRIMARY KEY,
             tournament_id TEXT NOT NULL,
@@ -90,6 +105,36 @@ def init_db():
             UNIQUE (tournament_id, username),
             FOREIGN KEY (tournament_id) REFERENCES tournaments(tournament_id),
             FOREIGN KEY (username) REFERENCES users(username)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS player_points (
+            id SERIAL PRIMARY KEY,
+            tournament_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            points_balance INTEGER DEFAULT 0,
+            UNIQUE (tournament_id, username),
+            FOREIGN KEY (tournament_id) REFERENCES tournaments(tournament_id),
+            FOREIGN KEY (username) REFERENCES users(username)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bets (
+            id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL,
+            match_id INTEGER NOT NULL,
+            tournament_id TEXT NOT NULL,
+            bet_type TEXT NOT NULL,
+            prediction_value TEXT NOT NULL,
+            points_wagered INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            payout_points INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW(),
+            FOREIGN KEY (username) REFERENCES users(username),
+            FOREIGN KEY (match_id) REFERENCES matches(id),
+            FOREIGN KEY (tournament_id) REFERENCES tournaments(tournament_id)
         )
     """)
 
@@ -854,6 +899,10 @@ def submit_league_score(match_id):
         WHERE id = %s
     """, (home_goals, away_goals, winner, match_id))
 
+    # Settle all pending bets for this match (only first time it's completed)
+    if not was_completed:
+        _process_bets_for_match(cursor, match_id, home_goals, away_goals, winner, match["tournament_id"])
+
     conn.commit()
     conn.close()
 
@@ -877,6 +926,609 @@ def api_lobby_state(tournament_id):
         return jsonify({"error": "not found"}), 404
     return jsonify({"players": players, "player_count": len(players), "status": row[0], "tournament_type": row[1]})
 
+
+@app.route("/generate_knockout/<tournament_id>")
+def generate_knockout(tournament_id):
+    import random
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if tournament["host"] != session["username"]:
+        flash("Only the host can generate the knockout bracket.", "error")
+        return redirect(url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT 1 FROM matches WHERE tournament_id = %s AND match_type = 'knockout' LIMIT 1",
+        (tournament_id,)
+    )
+    if cursor.fetchone():
+        conn.close()
+        return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+    cursor.execute(
+        "SELECT username FROM tournament_players WHERE tournament_id = %s",
+        (tournament_id,)
+    )
+    players = [row[0] for row in cursor.fetchall()]
+
+    if len(players) < 2:
+        conn.close()
+        flash("At least 2 players are required.", "error")
+        return redirect(url_for("dashboard"))
+
+    random.shuffle(players)
+
+    if len(players) % 2 == 1:
+        bye_player = players.pop()
+        cursor.execute(
+            "UPDATE tournaments SET bye_player = %s WHERE tournament_id = %s",
+            (bye_player, tournament_id)
+        )
+
+    for i in range(0, len(players), 2):
+        cursor.execute("""
+            INSERT INTO matches (tournament_id, round_name, home_player, away_player, match_type, status, sequence_order)
+            VALUES (%s, 'Round 1', %s, %s, 'knockout', 'pending', %s)
+        """, (tournament_id, players[i], players[i + 1], i // 2 + 1))
+
+    conn.commit()
+    conn.close()
+
+    flash("Knockout bracket generated!", "success")
+    return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+
+@app.route("/knockout/<tournament_id>")
+def view_knockout(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT 1 FROM tournament_players
+        WHERE tournament_id = %s AND username = %s
+    """, (tournament_id, session["username"]))
+    if not cursor.fetchone():
+        conn.close()
+        flash("You are not part of this tournament.", "error")
+        return redirect(url_for("dashboard"))
+
+    cursor.execute("""
+        SELECT * FROM matches
+        WHERE tournament_id = %s AND match_type = 'knockout'
+        ORDER BY sequence_order ASC
+    """, (tournament_id,))
+    matches = fetchall_as_dicts(cursor)
+    conn.close()
+
+    from collections import OrderedDict
+    rounds = OrderedDict()
+    for m in matches:
+        rn = m["round_name"]
+        if rn not in rounds:
+            rounds[rn] = []
+        rounds[rn].append(m)
+
+    # Only show bye notice while Round 1 still has pending matches
+    r1_pending = any(
+        m["status"] == "pending" and m["round_name"] == "Round 1"
+        for m in matches
+    )
+    bye_player = tournament.get("bye_player") if r1_pending else None
+
+    return render_template(
+        "knockout.html",
+        tournament_id=tournament_id,
+        tournament=tournament,
+        rounds=rounds,
+        bye_player=bye_player,
+        current_user=session["username"]
+    )
+
+
+@app.route("/submit_knockout_score/<int:match_id>", methods=["POST"])
+def submit_knockout_score(match_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM matches WHERE id = %s AND match_type = 'knockout'", (match_id,))
+    match = fetchone_as_dict(cursor)
+
+    if not match:
+        conn.close()
+        flash("Match not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    tournament_id = match["tournament_id"]
+    tournament = get_tournament(tournament_id)
+
+    if not tournament or tournament["host"] != session["username"]:
+        conn.close()
+        flash("Only the host can submit scores.", "error")
+        return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+    if match["status"] == "completed":
+        conn.close()
+        flash("This match is already completed.", "error")
+        return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+    try:
+        home_goals = int(request.form.get("home_goals", 0))
+        away_goals = int(request.form.get("away_goals", 0))
+    except ValueError:
+        conn.close()
+        flash("Invalid score.", "error")
+        return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+    if home_goals < 0 or away_goals < 0:
+        conn.close()
+        flash("Scores cannot be negative.", "error")
+        return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+    if home_goals == away_goals:
+        conn.close()
+        flash("Knockout matches cannot end in a draw.", "error")
+        return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+    winner = match["home_player"] if home_goals > away_goals else match["away_player"]
+
+    cursor.execute("""
+        UPDATE matches
+        SET home_goals = %s, away_goals = %s, winner = %s, status = 'completed'
+        WHERE id = %s
+    """, (home_goals, away_goals, winner, match_id))
+
+    current_round = match["round_name"]
+
+    # Check if all other matches in this round are already completed
+    cursor.execute("""
+        SELECT COUNT(*) FROM matches
+        WHERE tournament_id = %s AND match_type = 'knockout'
+        AND round_name = %s AND status != 'completed' AND id != %s
+    """, (tournament_id, current_round, match_id))
+    remaining = cursor.fetchone()[0]
+
+    if remaining == 0:
+        _advance_knockout_bracket(cursor, tournament_id, current_round, tournament)
+
+    conn.commit()
+    conn.close()
+
+    flash("Score saved.", "success")
+    return redirect(url_for("view_knockout", tournament_id=tournament_id))
+
+
+def _advance_knockout_bracket(cursor, tournament_id, completed_round, tournament):
+    cursor.execute("""
+        SELECT home_player, away_player, winner, home_goals, away_goals
+        FROM matches
+        WHERE tournament_id = %s AND match_type = 'knockout' AND round_name = %s
+        ORDER BY sequence_order ASC
+    """, (tournament_id, completed_round))
+    round_matches = cursor.fetchall()
+
+    bye_player = tournament.get("bye_player")
+
+    cursor.execute(
+        "SELECT COALESCE(MAX(sequence_order), 0) FROM matches WHERE tournament_id = %s AND match_type = 'knockout'",
+        (tournament_id,)
+    )
+    max_seq = cursor.fetchone()[0]
+
+    if completed_round == "Round 1":
+        num_matches = len(round_matches)
+        winners = [m[2] for m in round_matches]
+
+        if not bye_player:
+            # Even-player bracket — no bye
+            if num_matches == 1:
+                # 2 players: this match was the Final
+                cursor.execute(
+                    "UPDATE tournaments SET status = 'finished', winner = %s WHERE tournament_id = %s",
+                    (winners[0], tournament_id)
+                )
+            else:
+                # 4+ players: pair winners into Final / next round
+                cursor.execute("""
+                    INSERT INTO matches (tournament_id, round_name, home_player, away_player, match_type, status, sequence_order)
+                    VALUES (%s, 'Final', %s, %s, 'knockout', 'pending', %s)
+                """, (tournament_id, winners[0], winners[1], max_seq + 1))
+        else:
+            # Odd-player bracket — has bye
+            if num_matches == 1:
+                # 3-player: R1 winner goes to Final, R1 loser plays bye in Round 2
+                r1_match = round_matches[0]
+                home, away, r1_winner = r1_match[0], r1_match[1], r1_match[2]
+                r1_loser = away if r1_winner == home else home
+                cursor.execute(
+                    "UPDATE tournaments SET finalist_player = %s WHERE tournament_id = %s",
+                    (r1_winner, tournament_id)
+                )
+                cursor.execute("""
+                    INSERT INTO matches (tournament_id, round_name, home_player, away_player, match_type, status, sequence_order)
+                    VALUES (%s, 'Round 2', %s, %s, 'knockout', 'pending', %s)
+                """, (tournament_id, r1_loser, bye_player, max_seq + 1))
+
+            elif num_matches == 2:
+                # 5-player: sort R1 winners by goals scored desc
+                # high scorer → seeded to Final; low scorer plays bye in Round 2
+                winners_with_goals = []
+                for home, away, w, hg, ag in round_matches:
+                    goals = hg if w == home else ag
+                    winners_with_goals.append((w, goals))
+                winners_with_goals.sort(key=lambda x: x[1], reverse=True)
+                high_scorer = winners_with_goals[0][0]
+                low_scorer = winners_with_goals[1][0]
+
+                cursor.execute(
+                    "UPDATE tournaments SET finalist_player = %s WHERE tournament_id = %s",
+                    (high_scorer, tournament_id)
+                )
+                cursor.execute("""
+                    INSERT INTO matches (tournament_id, round_name, home_player, away_player, match_type, status, sequence_order)
+                    VALUES (%s, 'Round 2', %s, %s, 'knockout', 'pending', %s)
+                """, (tournament_id, low_scorer, bye_player, max_seq + 1))
+
+    elif completed_round == "Round 2":
+        # Round 2 winner faces the stored finalist in the Final
+        r2_winner = round_matches[0][2]
+        cursor.execute(
+            "SELECT finalist_player FROM tournaments WHERE tournament_id = %s",
+            (tournament_id,)
+        )
+        finalist = cursor.fetchone()[0]
+        cursor.execute("""
+            INSERT INTO matches (tournament_id, round_name, home_player, away_player, match_type, status, sequence_order)
+            VALUES (%s, 'Final', %s, %s, 'knockout', 'pending', %s)
+        """, (tournament_id, finalist, r2_winner, max_seq + 1))
+
+    elif completed_round == "Final":
+        final_winner = round_matches[0][2]
+        cursor.execute(
+            "UPDATE tournaments SET status = 'finished', winner = %s WHERE tournament_id = %s",
+            (final_winner, tournament_id)
+        )
+
+
+# ─── BETTING / POINTS SYSTEM ─────────────────────────────────────────────────
+
+def _process_bets_for_match(cursor, match_id, home_goals, away_goals, winner, tournament_id):
+    """Settle all pending bets for a just-completed match."""
+    total_goals = home_goals + away_goals
+    actual_score = f"{home_goals}-{away_goals}"
+
+    cursor.execute("SELECT * FROM bets WHERE match_id = %s AND status = 'pending'", (match_id,))
+    cols = [desc[0] for desc in cursor.description]
+    bets = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    for bet in bets:
+        won = False
+        payout = 0
+
+        if bet["bet_type"] == "winner":
+            if bet["prediction_value"] == winner:
+                won = True
+                payout = bet["points_wagered"] * 2
+
+        elif bet["bet_type"] == "exact_score":
+            if bet["prediction_value"] == actual_score:
+                won = True
+                payout = bet["points_wagered"] * 4
+
+        elif bet["bet_type"] == "total_goals":
+            pred = bet["prediction_value"]
+            try:
+                direction, threshold_str = pred.split("_", 1)
+                threshold = int(threshold_str)
+                if direction == "over" and total_goals > threshold:
+                    won = True
+                elif direction == "under" and total_goals < threshold:
+                    won = True
+            except (ValueError, AttributeError):
+                pass
+            if won:
+                payout = int(bet["points_wagered"] * 2.5)
+
+        cursor.execute(
+            "UPDATE bets SET status = %s, payout_points = %s WHERE id = %s",
+            ("won" if won else "lost", payout, bet["id"])
+        )
+        if won:
+            cursor.execute("""
+                UPDATE player_points SET points_balance = points_balance + %s
+                WHERE tournament_id = %s AND username = %s
+            """, (payout, tournament_id, bet["username"]))
+
+
+@app.route("/assign_points/<tournament_id>", methods=["GET", "POST"])
+def assign_points(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if tournament["host"] != session["username"]:
+        flash("Only the host can assign points.", "error")
+        return redirect(url_for("dashboard"))
+
+    if request.method == "POST":
+        target_username = request.form.get("username", "").strip()
+        try:
+            points_amount = int(request.form.get("points_amount", 0))
+        except ValueError:
+            flash("Invalid points amount.", "error")
+            return redirect(url_for("assign_points", tournament_id=tournament_id))
+
+        if points_amount < 20 or points_amount > 100:
+            flash("Starting points must be between 20 and 100.", "error")
+            return redirect(url_for("assign_points", tournament_id=tournament_id))
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT 1 FROM tournament_players WHERE tournament_id = %s AND username = %s",
+            (tournament_id, target_username)
+        )
+        if not cursor.fetchone():
+            conn.close()
+            flash("Player not found in this tournament.", "error")
+            return redirect(url_for("assign_points", tournament_id=tournament_id))
+
+        cursor.execute("""
+            INSERT INTO player_points (tournament_id, username, points_balance)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (tournament_id, username) DO UPDATE SET points_balance = EXCLUDED.points_balance
+        """, (tournament_id, target_username, points_amount))
+
+        conn.commit()
+        conn.close()
+        flash(f"Assigned {points_amount} points to {target_username}.", "success")
+        return redirect(url_for("assign_points", tournament_id=tournament_id))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT tp.username, COALESCE(pp.points_balance, NULL) AS points_balance
+        FROM tournament_players tp
+        LEFT JOIN player_points pp
+            ON tp.tournament_id = pp.tournament_id AND tp.username = pp.username
+        WHERE tp.tournament_id = %s
+        ORDER BY tp.username
+    """, (tournament_id,))
+    players = fetchall_as_dicts(cursor)
+    conn.close()
+
+    return render_template(
+        "assign_points.html",
+        tournament_id=tournament_id,
+        tournament=tournament,
+        players=players,
+        current_user=session["username"]
+    )
+
+
+@app.route("/place_bet/<int:match_id>", methods=["GET", "POST"])
+def place_bet(match_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM matches WHERE id = %s", (match_id,))
+    match = fetchone_as_dict(cursor)
+
+    if not match:
+        conn.close()
+        flash("Match not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    tournament_id = match["tournament_id"]
+
+    cursor.execute(
+        "SELECT 1 FROM tournament_players WHERE tournament_id = %s AND username = %s",
+        (tournament_id, session["username"])
+    )
+    if not cursor.fetchone():
+        conn.close()
+        flash("You are not in this tournament.", "error")
+        return redirect(url_for("dashboard"))
+
+    if match["status"] == "completed":
+        conn.close()
+        flash("Cannot bet on a completed match.", "error")
+        return redirect(url_for("view_league", tournament_id=tournament_id))
+
+    if request.method == "POST":
+        bet_type = request.form.get("bet_type", "").strip()
+
+        if bet_type not in ("winner", "exact_score", "total_goals"):
+            conn.close()
+            flash("Invalid bet type.", "error")
+            return redirect(url_for("place_bet", match_id=match_id))
+
+        try:
+            points_wagered = int(request.form.get("points_wagered", 0))
+        except ValueError:
+            conn.close()
+            flash("Invalid points amount.", "error")
+            return redirect(url_for("place_bet", match_id=match_id))
+
+        if points_wagered <= 0:
+            conn.close()
+            flash("Wagered points must be positive.", "error")
+            return redirect(url_for("place_bet", match_id=match_id))
+
+        # Build prediction_value from type-specific fields
+        if bet_type == "winner":
+            prediction_value = request.form.get("winner_prediction", "").strip()
+            if prediction_value not in (match["home_player"], match["away_player"]):
+                conn.close()
+                flash("Invalid winner prediction.", "error")
+                return redirect(url_for("place_bet", match_id=match_id))
+
+        elif bet_type == "exact_score":
+            exact_home = request.form.get("exact_home", "").strip()
+            exact_away = request.form.get("exact_away", "").strip()
+            if not exact_home.isdigit() or not exact_away.isdigit():
+                conn.close()
+                flash("Invalid score prediction.", "error")
+                return redirect(url_for("place_bet", match_id=match_id))
+            prediction_value = f"{exact_home}-{exact_away}"
+
+        else:  # total_goals
+            direction = request.form.get("goals_direction", "").strip()
+            goals_num = request.form.get("goals_number", "").strip()
+            if direction not in ("over", "under") or not goals_num.isdigit():
+                conn.close()
+                flash("Invalid total goals prediction.", "error")
+                return redirect(url_for("place_bet", match_id=match_id))
+            prediction_value = f"{direction}_{goals_num}"
+
+        # Check sufficient balance
+        cursor.execute(
+            "SELECT points_balance FROM player_points WHERE tournament_id = %s AND username = %s",
+            (tournament_id, session["username"])
+        )
+        balance_row = cursor.fetchone()
+        if not balance_row or balance_row[0] < points_wagered:
+            conn.close()
+            flash("Insufficient points balance.", "error")
+            return redirect(url_for("place_bet", match_id=match_id))
+
+        # Prevent duplicate bet on same match + type
+        cursor.execute(
+            "SELECT 1 FROM bets WHERE username = %s AND match_id = %s AND bet_type = %s AND status = 'pending'",
+            (session["username"], match_id, bet_type)
+        )
+        if cursor.fetchone():
+            conn.close()
+            flash(f"You already have a pending {bet_type.replace('_', ' ')} bet on this match.", "error")
+            return redirect(url_for("place_bet", match_id=match_id))
+
+        # Deduct points and record bet in one transaction
+        cursor.execute(
+            "UPDATE player_points SET points_balance = points_balance - %s WHERE tournament_id = %s AND username = %s",
+            (points_wagered, tournament_id, session["username"])
+        )
+        cursor.execute("""
+            INSERT INTO bets (username, match_id, tournament_id, bet_type, prediction_value, points_wagered, status, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending', NOW())
+        """, (session["username"], match_id, tournament_id, bet_type, prediction_value, points_wagered))
+
+        conn.commit()
+        conn.close()
+        flash("Bet placed successfully!", "success")
+        return redirect(url_for("place_bet", match_id=match_id))
+
+    # GET — load balance and existing bets for this match
+    tournament = get_tournament(tournament_id)
+
+    cursor.execute(
+        "SELECT points_balance FROM player_points WHERE tournament_id = %s AND username = %s",
+        (tournament_id, session["username"])
+    )
+    balance_row = cursor.fetchone()
+    user_balance = balance_row[0] if balance_row else None
+
+    cursor.execute(
+        "SELECT * FROM bets WHERE username = %s AND match_id = %s ORDER BY created_at DESC",
+        (session["username"], match_id)
+    )
+    user_bets = fetchall_as_dicts(cursor)
+    conn.close()
+
+    return render_template(
+        "place_bet.html",
+        match=match,
+        tournament=tournament,
+        tournament_id=tournament_id,
+        user_balance=user_balance,
+        user_bets=user_bets,
+        current_user=session["username"]
+    )
+
+
+@app.route("/points_leaderboard/<tournament_id>")
+def points_leaderboard(tournament_id):
+    if "username" not in session:
+        flash("Please log in first.", "error")
+        return redirect(url_for("login"))
+
+    tournament = get_tournament(tournament_id)
+    if not tournament:
+        flash("Tournament not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT 1 FROM tournament_players WHERE tournament_id = %s AND username = %s",
+        (tournament_id, session["username"])
+    )
+    if not cursor.fetchone():
+        conn.close()
+        flash("You are not in this tournament.", "error")
+        return redirect(url_for("dashboard"))
+
+    cursor.execute("""
+        SELECT
+            tp.username,
+            COALESCE(pp.points_balance, 0)                                    AS points_balance,
+            COUNT(b.id) FILTER (WHERE b.status = 'won')                       AS bets_won,
+            COUNT(b.id) FILTER (WHERE b.status = 'lost')                      AS bets_lost,
+            COUNT(b.id) FILTER (WHERE b.status = 'pending')                   AS bets_pending,
+            COALESCE(SUM(b.payout_points) FILTER (WHERE b.status = 'won'), 0) AS total_won_points
+        FROM tournament_players tp
+        LEFT JOIN player_points pp
+            ON tp.tournament_id = pp.tournament_id AND tp.username = pp.username
+        LEFT JOIN bets b
+            ON tp.username = b.username AND b.tournament_id = tp.tournament_id
+        WHERE tp.tournament_id = %s
+        GROUP BY tp.username, pp.points_balance
+        ORDER BY points_balance DESC, total_won_points DESC
+    """, (tournament_id,))
+    leaderboard = fetchall_as_dicts(cursor)
+    conn.close()
+
+    return render_template(
+        "leaderboard.html",
+        tournament_id=tournament_id,
+        tournament=tournament,
+        leaderboard=leaderboard,
+        current_user=session["username"]
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/api/match_state/<tournament_id>")
 def api_match_state(tournament_id):

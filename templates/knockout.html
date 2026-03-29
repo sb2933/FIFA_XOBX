@@ -155,20 +155,9 @@
     {% endif %}
 
     {% if bye_player %}
-      {% if bye_is_finalist %}
-        <div class="bye-notice">
-          🏆 <strong>{{ bye_player }}</strong> has already advanced to the <strong>Final</strong> — waiting for the semi-final winner.
-        </div>
-      {% else %}
-        <div class="bye-notice">
-          ⏳ <strong>{{ bye_player }}</strong> has a bye this round and is waiting.
-          {% if rounds|length == 1 %}
-            Once Round 1 finishes, they will play the <em>loser</em> — and the winner of that match meets the Round 1 winner in the Final.
-          {% else %}
-            Once all current matches finish, they will face the winner who scored the <em>fewest goals</em>. The highest scorer advances directly to the next round.
-          {% endif %}
-        </div>
-      {% endif %}
+      <div class="bye-notice">
+        ⏳ <strong>{{ bye_player }}</strong> has a bye — they'll enter in Round 2 once all Round 1 matches are done.
+      </div>
     {% endif %}
 
     {% if rounds %}
@@ -213,5 +202,31 @@
     {% endif %}
 
   </div>
+
+  <script>
+    (function () {
+      const parts = window.location.pathname.split('/').filter(Boolean);
+      const tid = parts[parts.length - 1];
+      let fingerprint = null;
+
+      async function poll() {
+        try {
+          const res = await fetch('/api/match_state/' + tid);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (fingerprint === null) {
+            fingerprint = data.fingerprint;
+            return;
+          }
+          if (data.fingerprint !== fingerprint) {
+            location.reload();
+          }
+        } catch (e) {}
+      }
+
+      poll();
+      setInterval(poll, 3000);
+    })();
+  </script>
 </body>
 </html>
